@@ -161,6 +161,7 @@
 浮窗裁切排查已按作者要求暂停，证据、环境与下一入口见 [排查交接](docs/roadmaps/float-clipping.md)。
 
 - 窗口绑定：配置绑定指定窗口，只在该窗口处于前台时生效，切走自动暂停（路线图见 [window-binding](docs/roadmaps/window-binding.md)）
+- 组合键触发与连发：例如按 `Ctrl+F` 连发 `Shift+1`（评估草案见 [key-chords](docs/roadmaps/key-chords.md)）
 - 外设模式支持切换连发的目标键与启动键相同、横版键鼠图：按设备区分按键来源（路线图见 [hid-stick](docs/roadmaps/hid-stick.md)）
 - 内置常用规则模板（FPS 快速连发、MOBA 技能连按），一键导入
 - 配置文件被外部改动后自动重新加载
