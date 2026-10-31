@@ -169,14 +169,23 @@ export default function FloatApp() {
     const el = floatRef.current;
     if (!el) return;
     let zoom = 1;
+    let sizeRevision = 0;
+    let disposed = false;
     // 内容尺寸是 CSS 像素，webview 放大后窗口要按同一比例放大才装得下
     const apply = () => {
+      const revision = ++sizeRevision;
       const rect = el.getBoundingClientRect();
       const w = Math.ceil(rect.width * zoom);
       const h = Math.ceil(rect.height * zoom);
       if (w > 0 && h > 0) {
-        getCurrentWindow()
-          .setSize(new LogicalSize(w, h))
+        const win = getCurrentWindow();
+        Promise.all([win.innerSize(), win.scaleFactor()])
+          .then(([actual, dpi]) => {
+            if (disposed || revision !== sizeRevision) return;
+            if (actual.width === Math.round(w * dpi) && actual.height === Math.round(h * dpi))
+              return;
+            return win.setSize(new LogicalSize(w, h));
+          })
           .catch(() => {});
       }
     };
@@ -190,6 +199,8 @@ export default function FloatApp() {
     };
     const ro = new ResizeObserver(apply);
     ro.observe(el);
+    // 系统字体度量变化可改变原生客户区，内容 CSS 尺寸不变时 ResizeObserver 不会通知。
+    window.addEventListener('resize', apply);
     apply();
 
     Promise.all([
@@ -202,7 +213,9 @@ export default function FloatApp() {
       .catch(() => {});
     const unlistenP = listen<number>(PANEL_SCALE_EVENT, (e) => applyZoom(e.payload));
     return () => {
+      disposed = true;
       ro.disconnect();
+      window.removeEventListener('resize', apply);
       unlistenP.then((fn) => fn()).catch(() => {});
     };
   }, []);

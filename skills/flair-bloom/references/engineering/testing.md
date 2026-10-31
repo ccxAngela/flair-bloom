@@ -86,6 +86,8 @@ cargo test -p burst-engine -- --ignored
 
 ## L3：发版前真机手动清单
 
+显示缩放回归：系统文字大小 100%／110%／150%，显示器缩放 100%／150%，分别验证横版、竖版、浮窗和应用缩放；包含启动时已放大、运行中更改、最大化后更改、复位与切换布局。改变文字大小不应改变应用界面尺寸，键盘和浮窗展开按钮不能越界；跨屏 DPI 和应用拖窗放大仍须生效。脚本 `scripts/diagnose-display-readonly.ps1` 只采外部环境，实际页面视口、DPR 和内容边界需通过测试 WebView 采样。
+
 压力测试与冒烟都不发真实输入，发版前在 Windows 真机用 release 包按可用后端（SendInput / DDSimple / Interception）各验一遍：
 
 - 面板聚焦、`trigger == target` 的 Toggle：注入事件必须被中继过滤吞掉，不能反复翻转 Toggle。

@@ -6,6 +6,7 @@ import { currentMonitor, cursorPosition, getCurrentWindow } from '@tauri-apps/ap
 import type { LazyStore } from '@tauri-apps/plugin-store';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  correctedWindowSize,
   fitScale,
   LAYOUT_BASE,
   maximizedRect,
@@ -218,17 +219,24 @@ export function useWindowScale(store: LazyStore) {
 
   useEffect(() => {
     const win = getCurrentWindow();
-    const unlisten = win.onResized(async ({ payload }) => {
+    let disposed = false;
+    const synchronize = async (payload: PhysicalSize) => {
+      if (disposed) return;
       // 拖边每帧一个事件，中间要等两次 IPC，先发的可能后到；只认最新一帧
       const seq = ++resizeSeqRef.current;
       const factor = await win.scaleFactor();
       const size = payload.toLogical(factor);
       const layout = layoutRef.current;
       const base = LAYOUT_BASE[layout];
+      const max = await workAreaMax(base);
+      if (disposed || seq !== resizeSeqRef.current) return;
+      const corrected = correctedWindowSize(size, base, max);
+      if (corrected) {
+        await win.setSize(new LogicalSize(corrected.width, corrected.height));
+        return;
+      }
       // 最小化时 Windows 报 0×0；有最小尺寸兜着，低于设计尺寸的都不是用户拖出来的
       if (size.width < base.width - 1 || size.height < base.height - 1) return;
-      const max = await workAreaMax(base);
-      if (seq !== resizeSeqRef.current) return;
       const next = fitScale(size, base, max);
       getCurrentWebview()
         .setZoom(next)
@@ -238,9 +246,21 @@ export function useWindowScale(store: LazyStore) {
       clearTimeout(persistTimerRef.current);
       if (maximizedRef.current) return;
       persistTimerRef.current = setTimeout(() => persist(layout, next), PERSIST_DELAY_MS);
-    });
+    };
+    const unlisten = win.onResized(({ payload }) => void synchronize(payload));
+    // WM_SETTINGCHANGE 可只让 WebView 收到视口变化，不一定触发 Tauri 的 Resized。
+    const onViewportResize = () => {
+      win
+        .innerSize()
+        .then(synchronize)
+        .catch(() => {});
+    };
+    window.addEventListener('resize', onViewportResize);
     return () => {
+      disposed = true;
+      resizeSeqRef.current += 1;
       clearTimeout(persistTimerRef.current);
+      window.removeEventListener('resize', onViewportResize);
       unlisten.then((fn) => fn()).catch(() => {});
     };
   }, [persist]);

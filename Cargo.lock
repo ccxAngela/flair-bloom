@@ -1277,9 +1277,11 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "webview2-com",
  "win-driver",
  "win-input",
  "win-sysinfo",
+ "windows",
  "windows-sys 0.59.0",
 ]
 

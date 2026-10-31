@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  correctedWindowSize,
   fitScale,
   LAYOUT_BASE,
   maximizedRect,
@@ -14,6 +15,20 @@ import {
 
 const V = LAYOUT_BASE.vertical;
 const INF = Number.POSITIVE_INFINITY;
+
+test('文字大小热切换使原生客户区少 4px 时恢复完整画布', () => {
+  assert.deepEqual(correctedWindowSize({ width: 1072, height: 599 }, LAYOUT_BASE.horizontal, INF), {
+    width: 1072,
+    height: 603,
+  });
+  assert.deepEqual(correctedWindowSize({ width: 405, height: 716 }, V, INF), V);
+});
+
+test('正常拖边的舍入误差不触发尺寸回写，最小化也不复位', () => {
+  assert.equal(correctedWindowSize({ width: 1072, height: 602.7 }, LAYOUT_BASE.horizontal, INF), undefined);
+  assert.equal(correctedWindowSize({ width: 810, height: 1440 }, V, INF), undefined);
+  assert.equal(correctedWindowSize({ width: 0, height: 0 }, V, INF), undefined);
+});
 
 test('fitScale 取宽高比例里较小的，内容不溢出', () => {
   assert.equal(fitScale({ width: 810, height: 1000 }, V, INF), 1.39);

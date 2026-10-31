@@ -55,6 +55,15 @@ export function scaledSize(base: Size, scale: number): Size {
   return { width: Math.round(base.width * scale), height: Math.round(base.height * scale) };
 }
 
+/** 原生字体度量变化可使无边框客户区变矮；保留宽度，把比例及最小尺寸校正回来。 */
+export function correctedWindowSize(size: Size, base: Size, max: number): Size | undefined {
+  if (size.width <= 0 || size.height <= 0) return undefined;
+  const target = scaledSize(base, Math.min(max, Math.max(1, size.width / base.width)));
+  return Math.abs(target.width - size.width) > 1 || Math.abs(target.height - size.height) > 1
+    ? target
+    : undefined;
+}
+
 /**
  * 最大化后的窗口矩形：工作区装得下的最大等比尺寸，在工作区里居中。比例锁着，铺满工作区会变形。
  * 坐标单位与传入的工作区一致。

@@ -134,6 +134,12 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
+            #[cfg(windows)]
+            if let tauri::WindowEvent::ScaleFactorChanged { scale_factor, .. } = event {
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                    bootstrap::webview_scale::apply(&webview, *scale_factor);
+                }
+            }
             match (window.label(), event) {
                 // 系统级最小化（Win+D、任务栏按钮、Aero Shake）也收进浮窗，与标题栏的最小化按钮
                 // 一致。否则面板缩进任务栏、浮窗又不占任务栏位，应用就只剩一个托盘图标，
@@ -229,6 +235,7 @@ pub fn run() {
             delete_sound_file,
         ])
         .setup(move |app| {
+            bootstrap::webview_scale::setup(app.handle());
             app.manage(LicenseState::load(app.handle()));
 
             // 全局热键回调：同步托盘菜单与前端开关状态
