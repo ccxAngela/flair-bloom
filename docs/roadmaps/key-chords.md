@@ -50,7 +50,7 @@ Goal: 支持组合键触发与组合键输出，例如 `Ctrl+F → Shift+1`，�
 
 SendInput 的一次数组调用有连续插入保证，但当前统一接口逐事件发送；DD／外设也不能直接获得这一保证。系统已按住的键还会影响注入，因此本应用可以协调自身规则，不能承诺隔离用户或其他进程的真实修饰键。[Microsoft SendInput 文档](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
 
-源码参照 TheCelestialDiviner 1.9.1 已支持输出修饰键，但采用各任务线程按下／释放的方式，不能据此推定它已解决跨规则修饰键干扰；同键 DD 的比较与证据见 [DD 排查](dd-coexistence.md)。
+源码参照 TheCelestialDiviner 1.9.1 已支持输出修饰键，但采用各任务线程按下／释放的方式，不能据此推定它已解决跨规则修饰键干扰；同键 DD 的约束见 [输入通道与共存边界](../../skills/flair-bloom/references/engineering/architecture.md#输入模式与注入通道)。
 
 ## 4. 建议任务卡（均未开始）
 

@@ -55,6 +55,10 @@ apps/site（独立 pnpm 项目，消费私有制品 @xwink/ui；引用 apps/main
 
 ## 输入模式与注入通道
 
+DD 共存边界：随包 `dd63330.dll` 的初始化路径以 `dwShareMode=0` 打开 `\\.\dd63330`，存在同设备访问冲突的可能；尚未用两个真实客户端证明共存故障。`init_backend` 只有显式进入 SendInput 分支才释放 DD 后端，切至 Interception / HidStick 或仅关闭全局连发仍可能保留资源；`FreeLibrary` 也不能证明 SDK 已清理内核状态。DD-HID 卸载和残留清理针对系统共享的 63340 驱动包，需用户显式调用，可能影响依赖同一包的其他程序。游戏模式安装的 Interception 过滤驱动同样跨进程存续；第三方有安装后 DD 回灌消失的报告，不能外推成所有版本必然互斥。排查需区分退出应用、Windows 重启、驱动安装历史、DD 版本 / 认证与杀软，不能只凭“使用过本应用”归因，也不自动卸载其他程序可能依赖的驱动。
+
+DD 同键启停仍依靠事件名额与时间窗口推测来源，不能可靠识别物理输入。竞品 TheCelestialDiviner 1.9.1 的 [EchoGuard](https://github.com/Dyse-Sofqi/The-Celestial-Diviner/blob/c2faa67e90b1229f687a4722281607eb38914b82/src/TheCelestialDiviner/Services/EchoGuard.cs) 使用预登记、FIFO、自适应超时和按住表恢复；这是降低故障概率的策略，不能保证持续注入下的物理停止不会被消费。当前产品继续限制 DD 同键切换连发，不能将竞品支持该交互当作其已保证稳定停止。
+
 `win_input::dispatch(KeyId, is_up)` 是统一入口，按 `(mode, KeyId)` 分发到对应后端。四档通道由用户在设置中选择：
 
 | 模式                           | 实现                                                    | 说明                                                                                                                                                                                                                                         |
