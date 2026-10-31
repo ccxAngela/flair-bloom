@@ -1,6 +1,6 @@
 # 浮窗裁切排查交接
 
-状态：2026-10-31 已继续 Windows 实机双屏验证；复现了缩放切换时的短暂裁切，尚未复现用户报告的持续裁切，根因未确认，产品代码未修改。本文件只保留证据与下一入口，不新增任务卡。
+状态：2026-10-31 已继续 Windows 实机双屏验证；复现了缩放切换时的短暂裁切，用户显示报告新增“系统文字大小 110%”的重要线索，与现有缩放计算漏项吻合。持续裁切尚未完成同机对照验证，产品代码未修改。本文件只保留证据与下一入口，不新增任务卡。
 
 ## 用户现象
 
@@ -71,3 +71,25 @@
 - 在裁切发生、窗口可见时运行脚本，默认在桌面生成 `flair-display-*.json`。脚本不打开调试端口，**没有读取页面 `innerWidth`、DPR 或实际 ZoomFactor**；普通权限无法取得的进程版本可能为 null，不能据此认为 WebView2 未安装。
 - 本机默认横版对照：作者切换为横版默认大小后采集，保存布局为 horizontal、横竖比例均为 1、未最大化；主面板、`WRY_WEBVIEW`、`Chrome_WidgetWin_1` 均为 1072×603 物理像素、DPI 96。两屏均 2560×1440、100%；正在使用 WebView2 156.0.4314.50。采集无错误；这确认原生尺寸链路一致，不代表已证明实际页面 zoom 为 1。
 - 本地原始报告：`.playwright-mcp/display-horizontal-default.json`。脚本完成 Windows PowerShell 实跑；报告与应用 settings.json 分开存放。
+
+## 用户显示报告：系统文字大小 110%
+
+来源为 `flair-display-20261031-235152-230.json`（采集时间 2026-10-31 23:51:51，reportVersion=1）；只记录与显示有关的事实，不将原始私人报告入库。
+
+| 项目 | 报告值 |
+| --- | --- |
+| 系统／应用 | Windows 11 25H2，26200.9457；FlairBloom 0.7.0 |
+| 系统辅助功能文字大小 | **110%**，独立于显示器缩放 |
+| 显示器 | 主屏 1920×1080、100%；副屏 3840×2160、150% |
+| 当前可见面板 | 位于 100% 主屏，DPI 96，per-monitor aware；原生、WRY_WEBVIEW、Chrome_WidgetWin_1 均为 **1200×675** |
+| 保存比例 | 横版 **1.12**，竖版 1.07；未采到有效的 panelMaximized 字段 |
+| WebView2 | **156.0.4314.50**，与本机版本相同 |
+| 其他 | 未采到强制设备缩放参数或应用 DPI 兼容标志；采集 errors 为空 |
+
+微软文档说明，WebView2 的 RasterizationScale 是显示器 DPI 缩放与用户文字缩放的组合；其内容会整体缩放，而不只是字体。[RasterizationScale 文档](https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2controller.rasterizationscale)、[微软工程师对该行为的说明](https://github.com/MicrosoftEdge/WebView2Feedback/issues/3699)
+
+当前面板从 `payload.toLogical(win.scaleFactor())` 算应用 zoom，没有计入辅助功能文字缩放；Wry 的 `zoom()` 直接调用 `SetZoomFactor`，并未在此抵消文字缩放。浮窗也只把 CSS 内容尺寸乘应用 zoom 后设为 LogicalSize，存在同一漏项。
+
+因此高度怀疑：窗口尺寸按 DPI 和应用 zoom 适配，但 WebView2 内容额外受 1.10 倍文字缩放影响。若实际应用 zoom 是保存的 1.12，则主屏上的 CSS 视口预计为 `1200 / (1.12 × 1.10) ≈ 974`、`675 / (1.12 × 1.10) ≈ 548`，小于横版设计 1072×603，符合固定宽度键盘居中后两侧被 overflow:hidden 裁切的形态。这里是根据已知 API 行为作出的推断，**报告没有直接读取 ZoomFactor、RasterizationScale、DPR 或 DOM 视口**。
+
+最短验证：保持屏幕缩放和应用窗口大小不变，只将 Windows“辅助功能 → 文字大小”从 110% 临时调到 100%，应用设置并重新打开应用，对比横版和浮窗。若恢复完整，再恢复 110% 复核，即形成同机对照。此测试尚未由本轮工具代用户执行。若成立，修复应统一适配实际 WebView 渲染比例，并覆盖系统文字大小变化；不能把修改用户的辅助功能设置作为永久修复。
