@@ -1,5 +1,11 @@
 ﻿# 第三方组件声明
 
+## Windows / WebView2 Rust 接口绑定
+
+- 项目：[windows-rs](https://github.com/microsoft/windows-rs)（`windows` 0.61，MIT OR Apache-2.0）、[webview2-rs](https://github.com/wravery/webview2-rs)（`webview2-com` 0.38，MIT）。
+- 用途：读取 WebView2 实际缩放与控制器尺寸，设置显示器 DPI 缩放以避免系统文字大小裁切界面。
+- 集成方式：仅 Windows 目标静态链接原版 Rust 接口绑定；WebView2 Runtime 仍由系统提供。
+
 ## Interception Driver
 
 - 项目：[Interception](https://github.com/oblitum/Interception)
