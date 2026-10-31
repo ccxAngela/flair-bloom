@@ -1,4 +1,4 @@
-//! DD-HID diagnostic report export.
+//! Unified driver and display diagnostic report export.
 
 #[allow(unused_imports)]
 use crate::commands::repair::{DiagnosticItem, ItemStatus, RepairReport, Severity};
@@ -11,7 +11,7 @@ use tauri::Manager;
 #[allow(dead_code)]
 const DIAGNOSE_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../scripts/diagnose-ddhid.ps1"
+    "/../../../scripts/diagnose-environment.ps1"
 ));
 
 #[tauri::command]
@@ -24,7 +24,7 @@ pub async fn export_dd_hid_diagnostic_report(app: AppHandle) -> Result<String, S
     #[cfg(not(windows))]
     {
         let _ = app;
-        Err("仅 Windows 平台支持导出 DD-HID 诊断报告".to_string())
+        Err("仅 Windows 平台支持导出环境诊断报告".to_string())
     }
 }
 
@@ -40,7 +40,7 @@ async fn export_report_windows(app: AppHandle) -> Result<String, String> {
         .join("diagnostics");
     std::fs::create_dir_all(&diagnostics_dir).map_err(|e| format!("创建诊断目录失败: {e}"))?;
 
-    let script_path = diagnostics_dir.join("diagnose-ddhid.ps1");
+    let script_path = diagnostics_dir.join("diagnose-environment.ps1");
     write_script_with_bom(&script_path)?;
     let script_path_for_task = script_path.clone();
 
@@ -87,6 +87,20 @@ async fn export_report_windows(app: AppHandle) -> Result<String, String> {
     let mut report = String::new();
     append_header(&mut report, &out_file, resources_root.as_deref());
     append_app_diagnosis(&mut report, &app_report);
+    push_section(&mut report, "Live app display environment (JSON)");
+    match crate::commands::display_environment::get_display_environment(app.clone()).await {
+        Ok(display) => match serde_json::to_string_pretty(&display) {
+            Ok(json) => {
+                let _ = writeln!(report, "{json}");
+            }
+            Err(error) => {
+                let _ = writeln!(report, "serialization_error: {error}");
+            }
+        },
+        Err(error) => {
+            let _ = writeln!(report, "collection_error: {error}");
+        }
+    }
     if let Some(resources_root) = resources_root.as_deref() {
         append_resource_files(&mut report, resources_root);
     } else {
@@ -107,7 +121,7 @@ fn append_header(
     out_file: &std::path::Path,
     resources_root: Option<&std::path::Path>,
 ) {
-    let _ = writeln!(out, "DDHID diagnostic report");
+    let _ = writeln!(out, "FlairBloom environment diagnostic report");
     let _ = writeln!(out, "generated_at_slug: {}", timestamp_slug());
     let _ = writeln!(out, "app_name: {}", crate::APP_NAME);
     let _ = writeln!(out, "app_version: {}", env!("CARGO_PKG_VERSION"));
@@ -251,7 +265,7 @@ fn status_label(status: ItemStatus) -> &'static str {
 fn write_script_with_bom(path: &std::path::Path) -> Result<(), String> {
     let mut bytes = Vec::with_capacity(3 + DIAGNOSE_SCRIPT.len());
     bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-    bytes.extend_from_slice(DIAGNOSE_SCRIPT.as_bytes());
+    bytes.extend_from_slice(DIAGNOSE_SCRIPT.trim_start_matches('\u{feff}').as_bytes());
     std::fs::write(path, bytes).map_err(|e| format!("写入诊断脚本失败: {e}"))
 }
 
@@ -271,7 +285,7 @@ fn default_report_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
         .unwrap_or_else(|_| std::env::temp_dir());
     let desktop = win_driver::path_util::strip_verbatim(desktop);
     std::fs::create_dir_all(&desktop).map_err(|e| format!("创建诊断输出目录失败: {e}"))?;
-    Ok(desktop.join(format!("ddhid-diagnose-{}.txt", timestamp_slug())))
+    Ok(desktop.join(format!("flair-environment-{}.txt", timestamp_slug())))
 }
 
 #[cfg(windows)]

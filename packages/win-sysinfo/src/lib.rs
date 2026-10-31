@@ -36,6 +36,7 @@ pub fn os_version() -> String {
         .unwrap_or_default();
     let product = read_reg_sz(hkey, "ProductName").unwrap_or_default();
     let build = read_reg_sz(hkey, "CurrentBuild").unwrap_or_default();
+    let product = windows_product_name(product, &build);
     let ubr = read_reg_dword(hkey, "UBR");
 
     // SAFETY: hkey 是上面 RegOpenKeyExW 成功返回的句柄
@@ -63,6 +64,17 @@ pub fn os_version() -> String {
         (true, false, true) => display,
         (true, true, false) => format!("Build {full_build}"),
     }
+}
+
+// Windows 11 部分系统的 ProductName 仍返回 Windows 10，按客户端构建号纠正显示名。
+#[cfg(any(windows, test))]
+fn windows_product_name(product: String, build: &str) -> String {
+    if build.parse::<u32>().is_ok_and(|value| value >= 22000) {
+        if let Some(edition) = product.strip_prefix("Windows 10") {
+            return format!("Windows 11{edition}");
+        }
+    }
+    product
 }
 
 #[cfg(not(windows))]
@@ -170,6 +182,19 @@ pub fn user_locale() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_product_name_preserves_edition_and_server_names() {
+        for (product, build, expected) in [
+            ("Windows 10 Pro", "26300", "Windows 11 Pro"),
+            ("Windows 10 Enterprise", "22631", "Windows 11 Enterprise"),
+            ("Windows 10 Pro", "19045", "Windows 10 Pro"),
+            ("Windows Server 2025", "26100", "Windows Server 2025"),
+            ("Windows 10 Pro", "", "Windows 10 Pro"),
+        ] {
+            assert_eq!(windows_product_name(product.to_string(), build), expected);
+        }
+    }
 
     #[test]
     fn install_path_is_non_empty_for_test_runner() {

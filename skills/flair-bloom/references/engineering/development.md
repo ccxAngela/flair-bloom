@@ -82,7 +82,8 @@ apps/main/src-tauri/src/        # Tauri 后端（Rust）
     log.rs / profile.rs         # 日志 / 配置文件 CRUD
     repair.rs                   # diagnose_environment + repair_* 命令
     resource_integrity.rs       # 打包资源完整性
-    ddhid_diagnostic.rs         # DDHID 残留诊断报告
+    ddhid_diagnostic.rs         # 统一驱动与显示环境诊断报告（保留旧 IPC 名）
+    display_environment.rs     # 按需采集实时 DPI / 文字大小 / 窗口 / WebView 控制器状态
     sound.rs                    # 自选提示音导入 / 读取 / 删除
     status.rs                   # get_app_status + emit_status_changed
   engine/mod.rs                 # 仅 re-export burst_engine / win_input 公开 API
@@ -111,7 +112,7 @@ packages/win-driver/src/        # elevation.rs、powershell.rs、dd_hid.rs（残
 packages/resource-integrity/    # 打包资源完整性校验
 skills/flair-bloom/             # 本 skill：项目文档单一来源
 docs/roadmaps/                  # 变更路线图（active / draft），完成归档到 archive/
-scripts/                        # bump-version、extract-changelog、check-skills、check-ddhid-resources、DDHID 诊断脚本
+scripts/                        # bump-version、extract-changelog、check-skills、check-ddhid-resources、统一环境诊断脚本
 ```
 
 ## 协作规范

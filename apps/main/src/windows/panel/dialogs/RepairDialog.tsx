@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { WINDOWS_RESTART_HINT } from '../../../constants';
 import Button from '../components/Button';
 import { useConfirm } from '../components/ConfirmDialog';
 import DialogShell from './DialogShell';
@@ -178,7 +179,7 @@ export default function RepairDialog({
         setOutcomes((prev) => ({ ...prev, [cmd]: result }));
         if (result.success) {
           if (result.pending_reboot) {
-            onToastRef.current('warn', `${result.summary}（请重启电脑）`);
+            onToastRef.current('warn', `${result.summary}\n${WINDOWS_RESTART_HINT}`);
           } else {
             onToastRef.current('success', result.summary);
           }
@@ -303,6 +304,7 @@ export default function RepairDialog({
 
         <section className="repair-section repair-section--drivers">
           <h3 className="repair-section-title">驱动状态</h3>
+          <p className="repair-status-hint">{WINDOWS_RESTART_HINT}</p>
           <ul className="repair-status-list">
             <li>
               <span className="repair-status-key">游戏模式驱动</span>
@@ -427,6 +429,7 @@ function RepairLog({ outcome }: { outcome: RepairOutcome }) {
       <p className={`repair-log-summary repair-log-summary--${outcome.success ? 'ok' : 'fail'}`}>
         {outcome.summary}
       </p>
+      {outcome.pending_reboot && <p className="repair-status-hint">{WINDOWS_RESTART_HINT}</p>}
       <ul className="repair-log-steps">
         {outcome.steps.map((s, i) => (
           <li key={i} className={`repair-log-step repair-log-step--${s.status}`}>

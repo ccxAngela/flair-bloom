@@ -16,7 +16,7 @@ import {
 } from 'react';
 import iconUrl from '../../assets/icon-32.png';
 import bgUrl from '../../assets/icon.png';
-import { APP_NAME, AUTHOR_EMAIL } from '../../constants';
+import { APP_NAME, AUTHOR_EMAIL, WINDOWS_RESTART_HINT } from '../../constants';
 import HorizontalLayout from './HorizontalLayout';
 import RuleCard, { type CardDragHandlers } from './RuleCard';
 import RuleGroup from './RuleGroup';
@@ -1543,6 +1543,9 @@ export default function PanelApp() {
           <>
             检测到游戏模式驱动处于「待重启」状态——上次安装或卸载尚未完成，
             必须重启电脑后才能使用此驱动。
+            <br />
+            <br />
+            {WINDOWS_RESTART_HINT}
           </>
         ),
         confirmText: '知道了',
@@ -1559,6 +1562,9 @@ export default function PanelApp() {
           <br />
           <br />
           <strong>安装完成后必须重启电脑，驱动才会生效。</strong>
+          <br />
+          <br />
+          {WINDOWS_RESTART_HINT}
         </>
       ),
       confirmText: '安装',
@@ -1578,6 +1584,9 @@ export default function PanelApp() {
           <br />
           <br />
           <strong>安装完成后请重启电脑</strong>，重启后再次切换到游戏模式即可生效。
+          <br />
+          <br />
+          {WINDOWS_RESTART_HINT}
         </>
       ),
       confirmText: '知道了',
@@ -2547,6 +2556,9 @@ export default function PanelApp() {
           <br />
           <br />
           <strong>卸载完成后必须重启电脑才能彻底生效。</strong>
+          <br />
+          <br />
+          {WINDOWS_RESTART_HINT}
         </>
       ),
       confirmText: '卸载',
@@ -2564,6 +2576,9 @@ export default function PanelApp() {
             <br />
             <br />
             <strong>请重启电脑使卸载彻底生效。</strong>
+            <br />
+            <br />
+            {WINDOWS_RESTART_HINT}
           </>
         ),
         confirmText: '知道了',
@@ -2584,6 +2599,9 @@ export default function PanelApp() {
           <br />
           <br />
           卸载流程会调用 PnP 标准接口处理，建议卸载完成后重启电脑。
+          <br />
+          <br />
+          {WINDOWS_RESTART_HINT}
         </>
       ),
       confirmText: '卸载',
@@ -2596,9 +2614,9 @@ export default function PanelApp() {
         'uninstall_dd_hid_driver',
       );
       if (r.pending_reboot) {
-        toast.warning(r.message, 8000);
+        toast.warning(`${r.message}\n${WINDOWS_RESTART_HINT}`, 12000);
       } else {
-        toast.success(r.message || 'DDHID 驱动已卸载');
+        toast.success(`${r.message || 'DDHID 驱动已卸载'}\n${WINDOWS_RESTART_HINT}`, 12000);
       }
     } catch (e) {
       toast.error(`卸载失败：${e}`);
@@ -3356,6 +3374,7 @@ export default function PanelApp() {
 
       <Overlay open={showAbout} onClose={() => setShowAbout(false)}>
         <AboutDialog
+          appearance={{ layout, scale: windowScale, maximized }}
           info={
             {
               appVersion,

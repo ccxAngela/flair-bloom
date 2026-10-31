@@ -27,6 +27,7 @@ use commands::{
         show_main_panel,
     },
     ddhid_diagnostic::export_dd_hid_diagnostic_report,
+    display_environment::get_display_environment,
     driver::{
         install_driver, is_dd_hid_driver_installed, is_driver_installed, is_elevated,
         relaunch_as_admin, uninstall_dd_hid_driver, uninstall_driver,
@@ -221,6 +222,7 @@ pub fn run() {
             log_from_frontend,
             open_app_dir,
             get_app_status,
+            get_display_environment,
             diagnose_environment,
             repair_dd_hid_residue,
             repair_interception_residue,

@@ -1,5 +1,6 @@
 pub mod app;
 pub mod ddhid_diagnostic;
+pub mod display_environment;
 pub mod driver;
 pub mod engine;
 pub mod import_profile;
