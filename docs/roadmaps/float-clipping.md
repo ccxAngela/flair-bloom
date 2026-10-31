@@ -10,7 +10,7 @@
 | 用户 B | 双屏，主面板与浮窗分处不同屏；各屏缩放未知 | 裁切有时会在游戏推进到后续 Boss 时恢复，恢复触发因素未确认 |
 | 作者自身 Windows | 双屏，此前未做主面板与浮窗分屏对照 | 尚未观察到同类问题，计划回家后对照 |
 
-两位受影响用户的具体 Windows 版本尚未确认。双屏是目前共同条件，不能据此认定所有双屏或 150% 缩放都会触发。
+受影响用户的具体 Windows 版本尚未确认。最新横版反馈说明单屏同样可能发生，双屏不再是必需条件，不能据此认定所有双屏或 150% 缩放都会触发。
 
 ## 已有证据
 
@@ -62,3 +62,12 @@
 - 有状态验证在新建 `test-float-clipping-20261031` 配置中完成；结束后切回原配置并删除测试配置。停止测试进程，settings.json 已按原文件逐字节恢复并核对 SHA-256；两屏已恢复 100%（DPI 96）。
 - 本地证据与诊断脚本保留在 `.playwright-mcp/float-repro/evidence/`（Git 忽略目录）：`*-matrix*.json`、`zoom-both150.json`、`cold-*-{hidden,visible,trace}.json`、`panel-resize-trace125.json`、`*native*.json` 及浮窗截图。`panel-resize-trace125.json` 保留全部逐帧样本；其他矩阵是稳定后采样，不能用于排除短暂裁切。
 - 下一步应在真正发生持续裁切时获取同样的尺寸读数，重点确认是否保持“放大后内容／放大前窗口”的比例、最后一次 zoom 与 setSize 的完成顺序，以及是否存在失败调用。尚未覆盖游戏运行／全屏切换、鼠标拖动跨屏、受影响用户的 WebView2 版本及其完整设置。
+
+## 横版单屏反馈与只读采样
+
+- 最新反馈：横版键盘左右两侧显示不全，单屏也能发生。固定宽度键盘居中、父容器 `overflow:hidden` 能解释两侧裁切的形态，但截图不能区分 WebView 实际 zoom 偏大、可用视口偏小、DPI 同步或布局尺寸问题。
+- `useWindowScale.ts` 从窗口物理尺寸和 DPI 换算应用比例，只在 resize 路径调用 `setZoom`；保存的 `panelScale` 不能直接证明当前 WebView 实际 zoom。需要把原生窗口测量与实际 DOM 视口分开记录。
+- 只读脚本：[scripts/diagnose-display-readonly.ps1](../../scripts/diagnose-display-readonly.ps1)。Windows PowerShell 5.1+，无需管理员；采集 Windows 构建、显示器尺寸／缩放、应用窗口与 WebView 子窗口客户区、DPI awareness、保存的布局／比例、WebView2 版本及应用 DPI 兼容标志。只写诊断 JSON，不调整应用、系统缩放或驱动；测量用的线程 DPI 上下文仅影响脚本自身且会恢复。不读取配置名称、规则、许可证或日志正文。
+- 在裁切发生、窗口可见时运行脚本，默认在桌面生成 `flair-display-*.json`。脚本不打开调试端口，**没有读取页面 `innerWidth`、DPR 或实际 ZoomFactor**；普通权限无法取得的进程版本可能为 null，不能据此认为 WebView2 未安装。
+- 本机默认横版对照：作者切换为横版默认大小后采集，保存布局为 horizontal、横竖比例均为 1、未最大化；主面板、`WRY_WEBVIEW`、`Chrome_WidgetWin_1` 均为 1072×603 物理像素、DPI 96。两屏均 2560×1440、100%；正在使用 WebView2 156.0.4314.50。采集无错误；这确认原生尺寸链路一致，不代表已证明实际页面 zoom 为 1。
+- 本地原始报告：`.playwright-mcp/display-horizontal-default.json`。脚本完成 Windows PowerShell 实跑；报告与应用 settings.json 分开存放。
