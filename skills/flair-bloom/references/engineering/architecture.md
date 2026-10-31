@@ -57,7 +57,7 @@ apps/site（独立 pnpm 项目，消费私有制品 @xwink/ui；引用 apps/main
 
 DD 共存边界：随包 `dd63330.dll` 的初始化路径以 `dwShareMode=0` 打开 `\\.\dd63330`，存在同设备访问冲突的可能；尚未用两个真实客户端证明共存故障。`init_backend` 只有显式进入 SendInput 分支才释放 DD 后端，切至 Interception / HidStick 或仅关闭全局连发仍可能保留资源；`FreeLibrary` 也不能证明 SDK 已清理内核状态。DD-HID 卸载和残留清理针对系统共享的 63340 驱动包，需用户显式调用，可能影响依赖同一包的其他程序。游戏模式安装的 Interception 过滤驱动同样跨进程存续；第三方有安装后 DD 回灌消失的报告，不能外推成所有版本必然互斥。排查需区分退出应用、Windows 重启、驱动安装历史、DD 版本 / 认证与杀软，不能只凭“使用过本应用”归因，也不自动卸载其他程序可能依赖的驱动。
 
-DD 同键启停仍依靠事件名额与时间窗口推测来源，不能可靠识别物理输入。竞品 TheCelestialDiviner 1.9.1 的 [EchoGuard](https://github.com/Dyse-Sofqi/The-Celestial-Diviner/blob/c2faa67e90b1229f687a4722281607eb38914b82/src/TheCelestialDiviner/Services/EchoGuard.cs) 使用预登记、FIFO、自适应超时和按住表恢复；这是降低故障概率的策略，不能保证持续注入下的物理停止不会被消费。当前产品继续限制 DD 同键切换连发，不能将竞品支持该交互当作其已保证稳定停止。
+DD 同键启停仍依靠事件名额与时间窗口推测来源，不能可靠识别物理输入。竞品 TheCelestialDiviner 1.9.1 的 [EchoGuard](https://github.com/Dyse-Sofqi/The-Celestial-Diviner/blob/c2faa67e90b1229f687a4722281607eb38914b82/src/TheCelestialDiviner/Services/EchoGuard.cs) 使用预登记、FIFO、自适应超时和按住表恢复；这是降低故障概率的策略，不能保证持续注入下的物理停止不会被消费。产品允许 DD 同键切换连发与横版键鼠图，接受同键启停可能误判，由全局关闭和正常退出时的停连发、抬键清理兜底；强杀进程无法执行退出清理。
 
 `win_input::dispatch(KeyId, is_up)` 是统一入口，按 `(mode, KeyId)` 分发到对应后端。四档通道由用户在设置中选择：
 
@@ -76,7 +76,7 @@ X1/X2 在 DD 模式 / 鼠标设备缺失时按 once 旗标 warn 一次后自动�
 
 **外设驱动与 Interception 设备槽**：Interception 的 `keyboard.sys` / `mouse.sys` 是键盘类 / 鼠标类的上层过滤驱动，每类 10 个设备槽，按设备出现先后往后分配，拔掉不还、重启才清零（实测鼠标槽 12、14–17 空着，新插的仍分到 18）。某类槽满后再插进来的设备分不到槽，输入被过滤驱动吞掉，设备管理器却显示正常——外设驱动对每条指令照回 `OK`，低级钩子一个键也收不到。装卸 DD-HID 每次都会留下一个虚拟键盘占槽。诊断修复的「外设驱动」两项（`repair.rs` 的 `diagnose_hidstick`）：串口扫描对每个非转串口芯片的 USB 串口握一次手（外设模式正用着的口不碰），设备槽检查用 `interception::device_hardware_ids`（只读、不要管理员）按 VID/PID 找外设驱动的键盘与鼠标各占几号槽，缺哪个报错并建议重启。**别用「移除全部键盘再重扫」去清槽**：实测 `keyboard.sys` 不会因此卸载，重新加回的键盘（包括用户的实体键盘）全都分不到槽而失灵，只能重启。
 
-**输入模式与布局互斥**：DDSimple 与 HidStick 的单键规则约束无法用横版键鼠图表达（横版每个键位都是 `trigger == target` 的重合态，DD 下重合态切换连发是空集，见 [key-policy](key-policy.md)），故二者互斥——`selectInputMode`（横版下禁选这两档）与 `switchLayout`（这两档下禁切横版）两个 choke point 拦截并提示。后者按后端下发的 `coincident_toggle` 能力位判断而非模式名，且用 `aria-disabled` 而非 `disabled`：禁用的按钮不触发 `onClick`，原因提示就永远跑不到。
+**输入模式与布局互斥**：仅 HidStick 的单键规则约束无法用横版键鼠图表达（横版每个键位都是 `trigger == target` 的重合态，外设模式下重合态切换连发是空集，见 [key-policy](key-policy.md)），故外设模式与横版互斥——`selectInputMode`（横版下禁选外设模式）与 `switchLayout`（外设模式下禁切横版）两个入口拦截并提示。后者按后端下发的 `coincident_toggle` 能力位判断而非模式名，且用 `aria-disabled` 而非 `disabled`：禁用的按钮不触发 `onClick`，原因提示就永远跑不到。DDSimple 支持两种布局。
 
 ## 连发引擎（`packages/burst-engine`）
 

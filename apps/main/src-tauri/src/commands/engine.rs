@@ -308,3 +308,44 @@ fn check_rules_for_mode(rules: &[BurstRule], mode: win_input::InputMode) -> Resu
     }
     Ok(())
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use qzh_profile::{BurstMode, MouseButton};
+    use win_input::InputMode;
+
+    #[test]
+    fn dd_accepts_coincident_toggle_in_capture_and_rule_validation() {
+        for target in [KeyId::Keyboard(0x51), KeyId::Mouse(MouseButton::Left)] {
+            let policy = slot_policy(
+                KeySlot::TriggerTargetToggle,
+                caps_for_mode(InputMode::DdSimple),
+            );
+            match target {
+                KeyId::Keyboard(_) => assert!(policy.keyboard),
+                KeyId::Mouse(button) => assert!(policy.mouse.contains(&button)),
+            }
+            for (trigger, stop) in [
+                (target, None),
+                (KeyId::Keyboard(0x46), Some(target)),
+                (target, Some(target)),
+            ] {
+                let rule = BurstRule {
+                    id: "same-key".into(),
+                    enabled: true,
+                    trigger_key: trigger,
+                    target_key: target,
+                    mode: BurstMode::Toggle,
+                    stop_key: stop,
+                    interval_ms: 10,
+                    group: None,
+                };
+                assert!(
+                    check_rules_for_mode(std::slice::from_ref(&rule), InputMode::DdSimple).is_ok()
+                );
+                assert!(check_rules_for_mode(&[rule], InputMode::HidStick).is_err());
+            }
+        }
+    }
+}

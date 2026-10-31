@@ -134,8 +134,7 @@ fn record_injection_in(map: &'static Mutex<PendingMap>, key: KeyId, is_up: bool,
 ///
 /// 这套时间窗口队列是**尽力而为、不保证 100%**：对同键规则（`trigger == target`）无法可靠
 /// 区分「用户真实按键」与「自身注入回灌」，高负载 / 丢事件时会偶发误判（连发自停或停不掉）。
-/// 这是 DD 驱动的固有缺陷，已决定**不再强行修复**——同键 Toggle 由
-/// `requires_distinct_target_for_toggle` 在配置层拦截，同键 Hold 则接受该不可靠性。
+/// DD 同键 Toggle / Hold 均接受该不可靠性，由全局关闭与正常退出时的停连发、抬键清理兜底。
 /// 彻底消除需 Raw Input 按来源区分 DD 虚拟设备与物理设备，非当前范围。
 #[cfg(any(test, windows))]
 fn record_injection(key: KeyId, is_up: bool) {
@@ -240,13 +239,11 @@ impl InputMode {
         }
     }
 
-    /// DD 系列（DDSimple / DD-HID）驱动注入无法携带 `SIM_MARKER`（驱动把 ExtraInformation
-    /// 写死为 0），自注入只能靠 `PENDING_INJECTIONS` 时间窗口队列过滤。该队列对
-    /// `target == trigger / stop` 的 Toggle 规则无法可靠区分「用户真实按下停止键」与
-    /// 「自身注入回灌」，会导致连发自停或停不掉。故 DD 系列禁止 Toggle 目标键与启动/停止键相同。
-    /// 外设驱动敲出的是真硬件事件，同样只能靠时间窗过滤，约束相同；要放开得按设备区分来源（Raw Input）。
+    /// 是否限制 Toggle 目标键与启动 / 停止键相同。
+    /// DD 自注入只能靠时间窗过滤，同键启停可能误判；产品接受此不可靠性，由全局关闭与正常退出清理兜底。
+    /// 外设驱动同样依赖时间窗过滤，目前仍保留同键限制。
     pub fn requires_distinct_target_for_toggle(&self) -> bool {
-        matches!(self, Self::DdSimple | Self::HidStick)
+        matches!(self, Self::HidStick)
     }
 
     /// 两档驱动要管理员权限；SendInput 与外设驱动（普通串口）不要。
@@ -967,13 +964,9 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn dd_series_forbids_same_key_toggle() {
-        // DD 系列驱动注入无法携带 SIM_MARKER（驱动清零 ExtraInformation），
-        // 同键 Toggle 无法可靠区分自注入与物理停止键，故两者都禁止。
-        assert!(InputMode::DdSimple.requires_distinct_target_for_toggle());
-        // 外设驱动同理：真硬件事件只能靠时间窗过滤。
+    fn only_hidstick_requires_distinct_target_for_toggle() {
+        assert!(!InputMode::DdSimple.requires_distinct_target_for_toggle());
         assert!(InputMode::HidStick.requires_distinct_target_for_toggle());
-        // 非 DD 系列不受限。
         assert!(!InputMode::SendInput.requires_distinct_target_for_toggle());
         assert!(!InputMode::Interception.requires_distinct_target_for_toggle());
     }

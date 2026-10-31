@@ -624,15 +624,14 @@ export default function SettingsDialog(props: Props) {
               <CardList>
                 {SELECTABLE_INPUT_MODES.map((mode) => {
                   const tag = modeTag(mode);
-                  // 时间窗过滤的两档（DD、外设驱动）与横版键鼠图互斥：横版下禁用。
-                  const ddBlocked =
-                    props.layout === 'horizontal' && (mode === 'ddsimple' || mode === 'hidstick');
+                  // 外设模式仍限制同键切换连发，横版下禁用。
+                  const layoutBlocked = props.layout === 'horizontal' && mode === 'hidstick';
                   return (
                     <CardListButton
                       key={mode}
                       active={props.inputMode === mode}
                       className="settings-mode"
-                      disabled={props.switchingMode || ddBlocked}
+                      disabled={props.switchingMode || layoutBlocked}
                       onClick={() => props.onSelectInputMode(mode)}
                     >
                       <span className="settings-mode-name">
@@ -644,7 +643,7 @@ export default function SettingsDialog(props: Props) {
                         )}
                       </span>
                       <span className="settings-mode-meta">
-                        {ddBlocked
+                        {layoutBlocked
                           ? '横版键鼠图下不可用，请先切回竖版'
                           : `${INPUT_MODE_HINTS[mode]} · ${modeDetail(mode, props)}`}
                       </span>
@@ -654,7 +653,7 @@ export default function SettingsDialog(props: Props) {
               </CardList>
               <p className="settings-note settings-note-warn">
                 ⚠️ DD 驱动可能无法正确停止连发、甚至自行停止连发，仅在「游戏模式」不可用时作为备用。
-                优先使用游戏模式。
+                同键启停异常时可关闭全局开关或正常退出应用，停止连发并释放按键。优先使用游戏模式。
               </p>
               <p className="settings-note">驱动安装与卸载操作请前往「诊断修复」。</p>
             </SettingsSection>

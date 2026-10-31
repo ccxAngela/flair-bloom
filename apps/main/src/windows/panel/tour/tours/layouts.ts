@@ -5,7 +5,7 @@ export const layouts: TourDef = {
   id: 'layouts',
   title: '横版键鼠图与浮窗',
   summary: '在键鼠图上直接点键，最小化成浮窗',
-  // 横版是单键模型（trigger == target），DD 系列建不出切换连发，switchLayout 本来就会拦；
+  // 横版是单键模型（trigger == target），外设模式建不出切换连发，switchLayout 本来就会拦；
   // 教程不绕过这条互斥，在目录里就说明白。
   available: (snapshot) => (snapshot.coincidentToggle ? undefined : '当前输入模式不支持横版键鼠图'),
   steps: [
@@ -17,6 +17,7 @@ export const layouts: TourDef = {
         '标题栏这个按钮在竖版规则列表和横版键鼠图之间切换。',
         '竖版适合精细编辑，横版一眼看清哪些键在用。',
         '界面跟随显示器缩放，不受 Windows 文字大小影响；需要放大时可以拖动面板边缘。',
+        'DD 驱动可用横版；外设模式暂不支持横版。',
       ),
       // 从竖版起步，下一步切过去才有对照
       prepare: async (host) => {

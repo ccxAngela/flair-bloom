@@ -275,10 +275,10 @@ function inputModeRequiresAdmin(mode: InputMode): boolean {
   return mode === 'interception' || mode === 'ddsimple';
 }
 
-// 自注入只能靠时间窗过滤的两档（DD 驱动、外设驱动）：切换连发建不出重合态，横版键鼠图无法表达，二者互斥。
+// 外设模式仍限制同键切换连发，与横版键鼠图互斥。
 // 已在横版时的拦截只能看目标模式名——切过去之前拿不到它的能力位。
 function blocksHorizontalLayout(mode: InputMode): boolean {
-  return mode === 'ddsimple' || mode === 'hidstick';
+  return mode === 'hidstick';
 }
 
 interface BurstRule {
@@ -333,7 +333,7 @@ interface ForkResult {
 function newRule(mode: BurstMode = 'hold'): BurstRule {
   const isHold = mode === 'hold';
   const triggerVk = isHold ? 0x51 : 0x46; // Hold: Q, Toggle: F
-  const targetVk = isHold ? 0x51 : 0x51; // Hold: Q, Toggle: Q（与 F 不同，避免 DD-HID 同键限制）
+  const targetVk = isHold ? 0x51 : 0x51; // 默认连发 Q；切换模式用 F 启停。
   return {
     id: crypto.randomUUID(),
     enabled: !isHold,
@@ -1741,7 +1741,7 @@ export default function PanelApp() {
   // ── 横版布局 ────────────────────────────────────────────────────────────────
   async function switchLayout(next: PanelLayout) {
     // 横版是单键模型，每个键位都是 trigger == target 的重合态。后端下发的
-    // coincident_toggle 为 false 时（当前是 DD 系列）切换连发建不出来，故禁止切到横版。
+    // coincident_toggle 为 false 时（当前是外设模式）切换连发建不出来，故禁止切到横版。
     // 判断依据取自后端能力位而不是模式名，新增后端时不必再改这里。
     //
     // 这里刻意重新拉一次而不用缓存：切换输入模式后策略是异步重取的，在它返回之前
@@ -1792,7 +1792,7 @@ export default function PanelApp() {
 
   /** 改模式保留分组：长按也能进组插队。 */
   function setRuleMode(rule: BurstRule, mode: BurstMode, extra: Partial<BurstRule> = {}) {
-    // 后端不支持切换连发的重合态（DD 系列）时，启动键 == 连发按键的规则改成切换是空集，
+    // 后端不支持切换连发的重合态（外设模式）时，启动键 == 连发按键的规则改成切换是空集，
     // 写进去也会在装载时被净化掉，不如当场拒绝并说明。
     if (
       mode === 'toggle' &&

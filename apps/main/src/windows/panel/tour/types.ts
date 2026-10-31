@@ -38,7 +38,7 @@ export interface TourSnapshot {
   keyCaptureSeq: number;
   settingsOpen: boolean;
   settingsTab: 'general' | 'hotkeys' | 'sound' | 'profiles';
-  /** 后端能力位：为 false（DD 系列）时横版键鼠图不可用。 */
+  /** 后端能力位：为 false（外设模式）时横版键鼠图不可用。 */
   coincidentToggle: boolean;
   /** 引擎里正在连发的规则 ID（已排序）。 */
   runningRuleIds: string[];
@@ -53,7 +53,7 @@ export interface TourSnapshot {
 export interface TourHost {
   snapshot: TourSnapshot;
   setFilter: (filter: TourSnapshot['filter']) => void;
-  /** 可能被拒绝（DD 模式切横版），拒绝时宿主自己提示，教程只需继续。 */
+  /** 可能被拒绝（外设模式切横版），拒绝时宿主自己提示，教程只需继续。 */
   setLayout: (layout: TourSnapshot['layout']) => Promise<void>;
   openSettings: (tab: TourSnapshot['settingsTab']) => void;
   closeSettings: () => void;

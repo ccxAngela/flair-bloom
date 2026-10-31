@@ -47,12 +47,7 @@ fn wheel_hold_emits_single_tap_not_start_then_stop() {
 #[test]
 fn toggle_same_key_starts_then_stops_on_next_press() {
     let trigger = KeyId::Keyboard(0x51);
-    let (engine, rec) = setup(vec![rule(
-        "t",
-        BurstMode::Toggle,
-        trigger,
-        KeyId::Keyboard(0x45),
-    )]);
+    let (engine, rec) = setup(vec![rule("t", BurstMode::Toggle, trigger, trigger)]);
 
     engine.on_key_press(trigger); // 开
     engine.on_key_release(trigger);
@@ -90,18 +85,29 @@ fn toggle_group_displacement_emits_stop_old_then_start_new() {
 #[test]
 fn disabling_global_switch_issues_stop_all_with_bumped_generation() {
     let trigger = KeyId::Keyboard(0x51);
-    let (engine, rec) = setup(vec![rule(
-        "t",
-        BurstMode::Toggle,
-        trigger,
-        KeyId::Keyboard(0x45),
-    )]);
+    let (engine, rec) = setup(vec![rule("t", BurstMode::Toggle, trigger, trigger)]);
 
     engine.on_key_press(trigger); // toggle 开
     rec.clear();
     engine.set_global_enabled(false, false); // 暂停 → stop_all（generation 递增到 2）
 
     assert_eq!(rec.cmds(), vec!["stopall:g2"]);
+}
+
+#[test]
+fn shutdown_stops_same_key_toggle_and_prevents_restart() {
+    let key = KeyId::Keyboard(0x51);
+    let (engine, rec) = setup(vec![rule("t", BurstMode::Toggle, key, key)]);
+    engine.on_key_press(key);
+    rec.clear();
+
+    engine.shutdown();
+    engine.set_global_enabled(true, false);
+    engine.on_key_press(key);
+    engine.shutdown();
+
+    assert_eq!(rec.cmds(), vec!["shutdown:g2"]);
+    assert!(engine.get_active_ids().is_empty());
 }
 
 #[test]

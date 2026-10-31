@@ -100,4 +100,4 @@ cargo test -p burst-engine -- --ignored
 
 ## 已知不可自动化的边界
 
-- **DD 同键 Hold（按住 Q 连发 Q）偶发自停**：DD 驱动清零 `ExtraInformation`，`SIM_MARKER` 无法幸存，hook 只能靠 `PENDING_INJECTIONS` 时间窗口尽力过滤，对同键无法可靠区分自注入与物理松手。这是 DD 驱动固有缺陷（竞品同样无解），L1 测不出，L2 sink 能观测到泄漏但做不成确定性断言。彻底消除需 Raw Input 按设备来源区分虚拟/物理设备。
+- **DD 同键 Hold / Toggle 偶发自停或原键停不下**：DD 驱动清零 `ExtraInformation`，`SIM_MARKER` 无法幸存，hook 只能靠 `PENDING_INJECTIONS` 时间窗口尽力过滤，对同键无法可靠区分自注入与物理按键。产品允许同键规则，以全局关闭、正常退出时的停连发与抬键清理兜底；L1/L1.5 只能验证停止契约，不能证明 DD 同键启停可靠。真机需检查全局关闭、正常退出后停止注入并释放按键。彻底消除误判需 Raw Input 按设备来源区分虚拟/物理设备。

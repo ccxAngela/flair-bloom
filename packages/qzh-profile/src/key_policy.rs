@@ -73,11 +73,11 @@ impl KeySlot {
 /// 当前输入后端的注入能力。由 `win-input` 的 `InputMode` 谓词填充。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InjectCaps {
-    /// 能否可靠过滤自注入，从而允许 Toggle 规则进入重合态。
+    /// 当前输入模式是否允许 Toggle 规则进入重合态，不代表自注入过滤可靠性。
     ///
     /// DD 系列把 `ExtraInformation` 写死为 0，`SIM_MARKER` 无法幸存，自注入只能靠时间
     /// 窗口队列过滤；该队列对重合键无法可靠区分「用户真实按下」与「自身回灌」，会导致
-    /// 连发自停或停不掉。故 DD 系列此项为 false，Toggle 规则的重合态槽位是空集。
+    /// 连发自停或停不掉。DD 接受此不可靠性，此项为 true；外设模式仍为 false。
     /// Hold 的重合态仍然放行——那份不可靠性是已知且已接受的，见 `win-input` 顶部注释。
     pub coincident_toggle: bool,
 }
