@@ -38,6 +38,22 @@ static HID_STICK_CONNECTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(windows)]
+static VERIFIED_STICK_PORTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// 用户主动诊断时握手成功的端口加入本会话监视，供非乐鑫设备使用。
+#[cfg(windows)]
+pub fn remember_verified_sticks(scans: &[win_input::hidstick::PortScan]) {
+    let mut verified = VERIFIED_STICK_PORTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for scan in scans.iter().filter(|scan| scan.is_stick()) {
+        if !verified.contains(&scan.name) {
+            verified.push(scan.name.clone());
+        }
+    }
+}
+
+#[cfg(windows)]
 fn set_hid_stick_connected(app: &tauri::AppHandle, connected: bool) {
     use std::sync::atomic::Ordering;
     use tauri::Emitter;
@@ -72,7 +88,7 @@ pub fn on_hid_stick_link_lost(app: &tauri::AppHandle) {
 }
 
 /// 盯外设驱动插拔：后台轮询乐鑫的 USB 串口，新出现的口握一次手，规则见
-/// [`win_input::hidstick::StickTracker`]。只碰乐鑫的口、且不在启动主线程上做：用户没点外设模式时，
+/// [`win_input::hidstick::StickTracker`]。默认只碰乐鑫，以及本会话主动诊断中握手确认的端口；后台执行，
 /// 握手不能拖慢启动，也不能去拉别家设备的 DTR（见 `pick_auto_candidates`）。
 /// 轮询而不是 `WM_DEVICECHANGE`：Tauri 不把窗口过程交出来，为它单开一个隐藏窗口不值。
 ///
@@ -81,7 +97,7 @@ pub fn on_hid_stick_link_lost(app: &tauri::AppHandle) {
 pub fn start_hid_stick_watcher(app: &tauri::AppHandle) {
     #[cfg(windows)]
     {
-        use win_input::hidstick::{auto_candidate_ports, probe, StickTracker};
+        use win_input::hidstick::{auto_candidate_ports, candidate_ports, probe, StickTracker};
         const POLL_EVERY: std::time::Duration = std::time::Duration::from_millis(1500);
 
         let app = app.clone();
@@ -93,7 +109,19 @@ pub fn start_hid_stick_watcher(app: &tauri::AppHandle) {
                     tracker.forget();
                 }
                 let in_use = win_input::hidstick_in_use().map(|(port, _)| port);
-                let candidates = auto_candidate_ports();
+                let mut candidates = auto_candidate_ports();
+                {
+                    let present = candidate_ports();
+                    let mut verified = VERIFIED_STICK_PORTS
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    verified.retain(|port| present.contains(port));
+                    for port in verified.iter() {
+                        if !candidates.contains(port) {
+                            candidates.push(port.clone());
+                        }
+                    }
+                }
                 let flip = tracker.poll(&candidates, |port| {
                     in_use.as_deref() == Some(port) || probe(port).is_some()
                 });

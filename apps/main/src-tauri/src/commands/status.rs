@@ -1,4 +1,4 @@
-﻿//! 会话级稳定状态汇总。
+//! 会话级稳定状态汇总。
 //!
 //! UI 启动时拉一次 [`get_app_status`]，之后只通过 `app-status-changed` 事件刷新。
 //! 高频/事件驱动的状态（规则、激活规则 ID、global_enabled）仍走独立命令，
@@ -27,6 +27,8 @@ pub enum DriverStatus {
 pub struct AppStatus {
     pub elevated: bool,
     pub interception_installed: DriverStatus,
+    /// 游戏模式当前不可启用的具体原因；不影响通用模式。
+    pub interception_issue: Option<String>,
     pub dd_hid_installed: DriverStatus,
     /// 外设驱动连着没有（插拔监视握过手才算）。外设模式的「驱动已装」。
     pub hid_stick_present: bool,
@@ -51,9 +53,11 @@ pub struct AppStatus {
 impl AppStatus {
     pub fn collect(app: &AppHandle) -> Self {
         let (resources_ok, missing_resources) = collect_resource_health(app);
+        let interception = collect_interception_health();
         Self {
             elevated: collect_elevated(),
-            interception_installed: collect_interception_installed(),
+            interception_installed: interception.status,
+            interception_issue: interception.issue,
             dd_hid_installed: collect_dd_hid_installed(),
             hid_stick_present: collect_hid_stick_present(),
             input_mode: collect_input_mode(),
@@ -109,25 +113,91 @@ fn collect_elevated() -> bool {
     false
 }
 
-#[cfg(windows)]
-fn collect_interception_installed() -> DriverStatus {
-    let api_ok = win_input::interception::is_driver_installed();
-    if api_ok {
-        return DriverStatus::Installed;
+pub(crate) struct InterceptionHealth {
+    pub status: DriverStatus,
+    pub issue: Option<String>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub detail: String,
+}
+
+pub(crate) fn collect_interception_health() -> InterceptionHealth {
+    #[cfg(windows)]
+    {
+        use win_sysinfo::registry;
+        let services = registry::is_interception_service("keyboard", "keyboard.sys")
+            || registry::is_interception_service("mouse", "mouse.sys");
+        let slots = win_input::interception::device_hardware_ids();
+        let classes = registry::input_class_indices("KeyboardClass").and_then(|keyboard| {
+            registry::input_class_indices("PointerClass").map(|mouse| (keyboard, mouse))
+        });
+        assess_interception_health(services, slots.as_deref(), classes)
     }
-    // API 不可用但服务键残留 → 卸载未完成或装了未重启
-    let kbd = win_sysinfo::registry::is_interception_service("keyboard", "keyboard.sys");
-    let mouse = win_sysinfo::registry::is_interception_service("mouse", "mouse.sys");
-    if kbd || mouse {
-        DriverStatus::PendingReboot
-    } else {
-        DriverStatus::NotInstalled
+    #[cfg(not(windows))]
+    {
+        InterceptionHealth {
+            status: DriverStatus::NotInstalled,
+            issue: None,
+            detail: String::new(),
+        }
     }
 }
 
-#[cfg(not(windows))]
-fn collect_interception_installed() -> DriverStatus {
-    DriverStatus::NotInstalled
+#[cfg(any(windows, test))]
+fn assess_interception_health(
+    services: bool,
+    slots: Option<&[(i32, String)]>,
+    classes: Result<(Vec<u32>, Vec<u32>), String>,
+) -> InterceptionHealth {
+    let Some(slots) = slots else {
+        let message = if services {
+            "游戏模式驱动已注册，但运行通道无法打开。首次安装后必须点击 Windows「重启」；如已重启，请退出其他使用 Interception 的程序后重试。"
+        } else {
+            "游戏模式驱动未安装，或通道被其他程序占用。请先检查驱动安装状态。"
+        };
+        return InterceptionHealth {
+            status: if services {
+                DriverStatus::PendingReboot
+            } else {
+                DriverStatus::NotInstalled
+            },
+            issue: Some(message.into()),
+            detail: message.into(),
+        };
+    };
+    let keyboard = slots.iter().filter(|(n, _)| (1..=10).contains(n)).count();
+    let mouse = slots.iter().filter(|(n, _)| (11..=20).contains(n)).count();
+    let mut detail = format!("驱动通道可打开；硬件 ID 可读：键盘 {keyboard}/10、鼠标 {mouse}/10");
+    let issue = match classes {
+        Err(error) => Some(format!(
+            "{error}，无法确认游戏模式设备槽是否可用，请在诊断修复中检查后重试。"
+        )),
+        Ok((keyboards, mice)) => {
+            let keyboard_max = keyboards.into_iter().max();
+            let mouse_max = mice.into_iter().max();
+            detail.push_str(&format!(
+                "；内核类设备最高编号：键盘 {keyboard_max:?}、鼠标 {mouse_max:?}"
+            ));
+            if keyboard >= 10
+                || mouse >= 10
+                || keyboard_max.is_some_and(|n| n >= 10)
+                || mouse_max.is_some_and(|n| n >= 10)
+            {
+                Some("游戏模式设备槽已达到上限或出现超出范围的设备编号（键盘、鼠标各 10 个，不能互借）。拔插和退出应用不能回收槽位，必须点击 Windows「开始 → 电源 → 重启」；关机再开机可能因快速启动而无效。重启前使用通用模式。".into())
+            } else if keyboard == 0 || mouse == 0 {
+                Some("游戏模式通道已打开，但未找到可读取硬件 ID 的键盘或鼠标设备。请重启 Windows 后重试；当前使用通用模式。".into())
+            } else {
+                None
+            }
+        }
+    };
+    if let Some(reason) = &issue {
+        detail.push_str(&format!("；{reason}"));
+    }
+    InterceptionHealth {
+        status: DriverStatus::Installed,
+        issue,
+        detail,
+    }
 }
 
 #[cfg(windows)]
@@ -229,6 +299,59 @@ fn collect_resource_health(app: &AppHandle) -> (bool, Vec<String>) {
 mod tests {
     use super::*;
 
+    fn online_slots(keyboards: i32, mice: i32) -> Vec<(i32, String)> {
+        (1..=keyboards)
+            .chain(11..11 + mice)
+            .map(|n| (n, "device".into()))
+            .collect()
+    }
+
+    #[test]
+    fn registered_driver_without_runtime_requires_restart() {
+        let health = assess_interception_health(true, None, Ok((vec![0], vec![0])));
+        assert_eq!(health.status, DriverStatus::PendingReboot);
+        assert!(health.issue.unwrap().contains("首次安装"));
+    }
+
+    #[test]
+    fn open_context_without_hardware_ids_is_not_ready() {
+        let health = assess_interception_health(true, Some(&[]), Ok((vec![0], vec![0])));
+        assert!(health.issue.unwrap().contains("未找到"));
+    }
+
+    #[test]
+    fn full_keyboard_or_mouse_capacity_requires_restart_independently() {
+        for (keyboard, mouse) in [(10, 1), (1, 10), (10, 10)] {
+            let slots = online_slots(keyboard, mouse);
+            let health = assess_interception_health(true, Some(&slots), Ok((vec![0], vec![0])));
+            assert!(health.issue.unwrap().contains("必须点击 Windows"));
+        }
+    }
+
+    #[test]
+    fn high_class_index_detects_exhaustion_despite_low_online_count() {
+        let slots = online_slots(1, 1);
+        for classes in [(vec![12], vec![0]), (vec![0], vec![10])] {
+            let health = assess_interception_health(true, Some(&slots), Ok(classes));
+            assert!(health.issue.unwrap().contains("超出范围"));
+        }
+        assert!(
+            assess_interception_health(true, Some(&slots), Ok((vec![9], vec![9])))
+                .issue
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn failed_class_enumeration_does_not_claim_ready() {
+        let slots = online_slots(1, 1);
+        assert!(
+            assess_interception_health(true, Some(&slots), Err("拒绝访问".into()))
+                .issue
+                .is_some()
+        );
+    }
+
     #[test]
     fn event_name_is_stable() {
         // 前端 listen 的事件名硬编码在 PanelApp.tsx，名字一旦改动两端必须同步。
@@ -240,6 +363,7 @@ mod tests {
         AppStatus {
             elevated: true,
             interception_installed: DriverStatus::Installed,
+            interception_issue: None,
             dd_hid_installed: DriverStatus::PendingReboot,
             hid_stick_present: false,
             input_mode: "dd_hid".to_string(),
@@ -269,6 +393,7 @@ mod tests {
         for key in [
             "elevated",
             "interception_installed",
+            "interception_issue",
             "dd_hid_installed",
             "input_mode",
             "configured_input_mode",

@@ -27,8 +27,17 @@ impl InterceptionBackend {
         if ctx.is_null() {
             return None;
         }
-        let keyboard_device = find_keyboard()?;
-        let mouse_device = find_mouse();
+        let slots = hardware_ids_in(ctx);
+        let Some(keyboard_device) = first_device(&slots, 1..=10) else {
+            // SAFETY: ctx 由本次 create 返回，未转交给后端。
+            unsafe { interception_destroy_context(ctx) };
+            error!("Interception: 没有能读取硬件 ID 的键盘设备");
+            return None;
+        };
+        let mouse_device = first_device(&slots, 11..=20);
+        if mouse_device.is_none() {
+            warn!("Interception: 没有能读取硬件 ID 的鼠标设备");
+        }
         info!(
             "Interception 后端初始化成功，键盘 ID: {}, 鼠标 ID: {:?}",
             keyboard_device, mouse_device
@@ -161,28 +170,11 @@ impl Drop for InterceptionBackend {
     }
 }
 
-fn find_keyboard() -> Option<InterceptionDevice> {
-    for device in 1..=(INTERCEPTION_MAX_KEYBOARD as InterceptionDevice) {
-        // SAFETY: device 在有效范围内
-        if unsafe { interception_is_keyboard(device) } != 0 {
-            return Some(device);
-        }
-    }
-    error!("Interception: 未找到键盘设备");
-    None
-}
-
-fn find_mouse() -> Option<InterceptionDevice> {
-    let start = (INTERCEPTION_MAX_KEYBOARD as InterceptionDevice) + 1;
-    let end = INTERCEPTION_MAX_DEVICE as InterceptionDevice;
-    for device in start..=end {
-        // SAFETY: device 在有效范围内
-        if unsafe { interception_is_mouse(device) } != 0 {
-            return Some(device);
-        }
-    }
-    warn!("Interception: 未找到鼠标设备，鼠标注入将被丢弃");
-    None
+fn first_device(slots: &[(i32, String)], range: std::ops::RangeInclusive<i32>) -> Option<i32> {
+    slots
+        .iter()
+        .find(|(id, _)| range.contains(id))
+        .map(|(id, _)| *id)
 }
 
 /// Interception 20 个设备槽各自挂的硬件 ID，空槽不列；槽号划分见 `hidstick::KEYBOARD_SLOTS`。
@@ -191,11 +183,24 @@ fn find_mouse() -> Option<InterceptionDevice> {
 /// 槽位按设备出现的先后往后分，拔掉的设备不还槽，重启前不回收：每类满 10 个之后再插进来的
 /// 设备分不到槽，它的输入会被驱动吞掉（设备管理器里却显示正常）。诊断靠这里看出这件事。
 pub fn device_hardware_ids() -> Option<Vec<(i32, String)>> {
+    // SDK 独占打开设备，诊断必须复用正在使用的 context，不能把本应用的占用误判为驱动失效。
+    let cell = crate::INTERCEPTION_BACKEND.get_or_init(|| std::sync::Mutex::new(None));
+    let guard = crate::revive(cell.lock());
+    if let Some(backend) = guard.as_ref() {
+        return Some(hardware_ids_in(backend.ctx));
+    }
     // SAFETY: interception_create_context 失败返回 null
     let ctx = unsafe { interception_create_context() };
     if ctx.is_null() {
         return None;
     }
+    let out = hardware_ids_in(ctx);
+    // SAFETY: ctx 由上面 create 成功返回，此后不再使用。
+    unsafe { interception_destroy_context(ctx) };
+    Some(out)
+}
+
+fn hardware_ids_in(ctx: InterceptionContext) -> Vec<(i32, String)> {
     let mut out = Vec::new();
     for device in 1..=20 {
         let mut buf = [0u16; 512];
@@ -216,19 +221,24 @@ pub fn device_hardware_ids() -> Option<Vec<(i32, String)>> {
             out.push((device, first.to_string()));
         }
     }
-    // SAFETY: ctx 由上面 create 成功返回，此后不再使用
-    unsafe { interception_destroy_context(ctx) };
-    Some(out)
+    out
 }
 
 /// 检测 Interception 驱动是否已安装（尝试创建 context）。
 pub fn is_driver_installed() -> bool {
-    // SAFETY: interception_create_context 失败返回 null
-    let ctx = unsafe { interception_create_context() };
-    if ctx.is_null() {
-        return false;
+    device_hardware_ids().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_selection_skips_empty_slots_and_separates_device_classes() {
+        let slots = vec![(4, "keyboard".into()), (13, "mouse".into())];
+        assert_eq!(first_device(&slots, 1..=10), Some(4));
+        assert_eq!(first_device(&slots, 11..=20), Some(13));
+        assert_eq!(first_device(&[], 1..=10), None);
+        assert_eq!(first_device(&slots[..1], 11..=20), None);
     }
-    // SAFETY: ctx 是上面返回的有效指针
-    unsafe { interception_destroy_context(ctx) };
-    true
 }

@@ -40,6 +40,12 @@ pub fn is_driver_installed() -> bool {
 pub async fn install_driver(app: AppHandle) -> Result<(), String> {
     #[cfg(windows)]
     {
+        let health = crate::commands::status::collect_interception_health();
+        if health.status != crate::commands::status::DriverStatus::NotInstalled {
+            return Err(health
+                .issue
+                .unwrap_or_else(|| "游戏模式驱动已安装，无需重复安装。".into()));
+        }
         let res_dir = resource_dir(&app)?;
         let health = crate::commands::resource_integrity::check_resources(&res_dir);
         if !health.issues.is_empty() {
@@ -56,6 +62,13 @@ pub async fn install_driver(app: AppHandle) -> Result<(), String> {
         let result = win_driver::interception::install(&res_dir).await;
         if let Err(ref e) = result {
             tracing::error!("Interception 驱动安装失败：{e}");
+        }
+        if result.is_ok() {
+            crate::commands::engine::switch_input_backend(
+                &app,
+                &app.state::<crate::commands::engine::EngineState>().0,
+                win_input::InputMode::SendInput,
+            );
         }
         crate::commands::status::emit_status_changed(&app);
         result

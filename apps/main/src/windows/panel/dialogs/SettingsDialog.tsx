@@ -74,6 +74,7 @@ interface Props {
   elevated: boolean;
   closeBehavior: CloseBehavior | null;
   interceptionInstalled: DriverStatus;
+  interceptionIssue: string | null;
   ddHidInstalled: DriverStatus;
   hidStickPresent: boolean;
   autostartEnabled: boolean;
@@ -155,7 +156,7 @@ const INPUT_MODE_LABELS: Record<SettingsInputMode, string> = {
 };
 
 const INPUT_MODE_HINTS: Record<SettingsInputMode, string> = {
-  sendinput: 'SendInput',
+  sendinput: '普通软件与网页 · 大部分游戏无效',
   interception: 'Interception',
   ddsimple: 'DD驱动',
   hidstick: '外设驱动',
@@ -230,6 +231,9 @@ function driverStatusLabel(status: DriverStatus): string {
 
 function modeDetail(mode: SettingsInputMode, props: Props): string {
   if (mode === 'interception') {
+    if (props.interceptionIssue && props.interceptionInstalled !== 'not_installed') {
+      return '驱动未就绪 · 点击查看原因';
+    }
     if (props.interceptionInstalled !== 'installed') {
       return driverStatusLabel(props.interceptionInstalled);
     }
@@ -622,7 +626,9 @@ export default function SettingsDialog(props: Props) {
 
             <SettingsSection title="输入模式">
               <CardList>
-                {SELECTABLE_INPUT_MODES.map((mode) => {
+                {SELECTABLE_INPUT_MODES.filter(
+                  (mode) => mode !== 'hidstick' || props.hidStickPresent,
+                ).map((mode) => {
                   const tag = modeTag(mode);
                   // 外设模式仍限制同键切换连发，横版下禁用。
                   const layoutBlocked = props.layout === 'horizontal' && mode === 'hidstick';

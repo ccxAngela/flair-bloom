@@ -438,6 +438,8 @@ impl BurstEngine {
         clear_pending_injections();
         clear_relay_injections();
         self.reset_physical_ledger();
+        #[cfg(windows)]
+        win_input::release_backends();
         revive(self.runtime.lock()).lifecycle = EngineLifecycle::Shutdown;
     }
 

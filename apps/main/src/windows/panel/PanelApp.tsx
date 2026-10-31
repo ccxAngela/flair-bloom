@@ -48,6 +48,7 @@ import Overlay from './components/Overlay';
 import ProfileNameForm from './components/ProfileNameForm';
 import Tabs from './components/Tabs';
 import { useToast } from './components/Toast';
+import { useImportWelcome } from './useImportWelcome';
 import UpdateProgressBar, { type UpdateDownloadProgress } from './components/UpdateProgressBar';
 import { detectConflicts, severityForKey, severityForRule } from './conflicts';
 import TourRunner from './tour/TourRunner';
@@ -231,6 +232,7 @@ type DriverStatus = 'installed' | 'pending_reboot' | 'not_installed';
 interface AppStatus {
   elevated: boolean;
   interception_installed: DriverStatus;
+  interception_issue: string | null;
   dd_hid_installed: DriverStatus;
   hid_stick_present: boolean;
   input_mode: string;
@@ -396,6 +398,9 @@ function orderProfiles(profiles: ProfileEntry[]): ProfileEntry[] {
 
 export default function PanelApp() {
   const [showAgreement, setShowAgreement] = useState(false);
+  const [agreementChecked, setAgreementChecked] = useState(false);
+  const importWelcome = useImportWelcome(settingsStore);
+  const importWelcomeHandled = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
@@ -434,6 +439,7 @@ export default function PanelApp() {
   );
   const [inputMode, setInputMode] = useState<InputMode>('sendinput');
   const [interceptionInstalled, setInterceptionInstalled] = useState<DriverStatus>('not_installed');
+  const [interceptionIssue, setInterceptionIssue] = useState<string | null>(null);
   const [ddHidInstalled, setDdHidInstalled] = useState<DriverStatus>('not_installed');
   const [hidStickPresent, setHidStickPresent] = useState(false);
   // 插拔事件在挂载期注册，要调到最新渲染的处理函数
@@ -685,6 +691,7 @@ export default function PanelApp() {
   const applyAppStatus = useCallback((status: AppStatus) => {
     setElevated(status.elevated);
     setInterceptionInstalled(status.interception_installed);
+    setInterceptionIssue(status.interception_issue);
     setDdHidInstalled(status.dd_hid_installed);
     setHidStickPresent(status.hid_stick_present);
     setSysInfo({
@@ -716,6 +723,11 @@ export default function PanelApp() {
     if (configured === 'sendinput' || configured === status.input_mode) return;
 
     startupInputModeHandledRef.current = true;
+
+    if (configured === 'interception' && status.interception_issue) {
+      await showInterceptionIssue(status.interception_issue);
+      return;
+    }
 
     if (inputModeRequiresAdmin(configured) && !status.elevated) {
       const label = INPUT_MODE_LABELS[configured];
@@ -771,7 +783,46 @@ export default function PanelApp() {
   // 就绪门只挡这条自动触发：菜单入口不挡，启动头两秒点了没反应比气泡晚两秒更费解，
   // 手动开的教程遇到确认框由 paused 让路即可。
   useEffect(() => {
+    if (!importWelcome.loaded || !importWelcome.pending || importWelcomeHandled.current) return;
+    if (
+      !agreementChecked ||
+      !initialLoadSettled ||
+      showAgreement ||
+      !noticeSettled ||
+      !startupModeSettled
+    )
+      return;
+    if (confirmOpen || updateNotice !== null || showImport) return;
+    importWelcomeHandled.current = true;
+    void (async () => {
+      const scan = await confirm({
+        title: '要导入已有的按键配置吗？',
+        description:
+          '支持丐帮高手、衍天高手、极简按键和小叽按键。可以先扫描，再自行选择配置、查看转换预览，确认后才导入。以后也能从「☰ → 导入其他助手配置」打开。',
+        confirmText: '扫描已有配置',
+        cancelText: '暂不导入',
+      });
+      if (scan) setShowImport(true);
+      await importWelcome
+        .complete()
+        .catch(() => toast.warning('导入提示状态未能保存，本次选择仍然有效'));
+    })();
+  }, [
+    importWelcome.loaded,
+    importWelcome.pending,
+    agreementChecked,
+    initialLoadSettled,
+    showAgreement,
+    noticeSettled,
+    startupModeSettled,
+    confirmOpen,
+    updateNotice,
+    showImport,
+  ]);
+
+  useEffect(() => {
     if (!tourProgress.loaded || tourProgress.introSeen || firstRunHandled.current) return;
+    if (!agreementChecked || !importWelcome.loaded || importWelcome.pending || showImport) return;
     if (!initialLoadSettled || showAgreement) return;
     if (!noticeSettled || !startupModeSettled) return;
     // 启动期的自动更新检查是后台跑的，update-ready 可能在任何时刻弹。它开着时不能 startTour，
@@ -786,6 +837,10 @@ export default function PanelApp() {
   }, [
     tourProgress.loaded,
     tourProgress.introSeen,
+    agreementChecked,
+    importWelcome.loaded,
+    importWelcome.pending,
+    showImport,
     initialLoadSettled,
     showAgreement,
     noticeSettled,
@@ -979,7 +1034,8 @@ export default function PanelApp() {
       .then((needed) => {
         if (needed) setShowAgreement(true);
       })
-      .catch(() => {});
+      .catch(() => setShowAgreement(true))
+      .finally(() => setAgreementChecked(true));
     const unlistenStatus = listen<AppStatus>(APP_STATUS_EVENT, (e) => {
       applyAppStatus(e.payload);
     });
@@ -1178,15 +1234,25 @@ export default function PanelApp() {
   useEffect(() => {
     if (startupStickCheckedRef.current) return;
     if (!initialLoadSettled || !startupModeSettled || !noticeSettled || showAgreement) return;
+    if (!importWelcome.loaded || importWelcome.pending || showImport) return;
     startupStickCheckedRef.current = true;
     void hidStickConnectedRef.current();
-  }, [initialLoadSettled, startupModeSettled, noticeSettled, showAgreement]);
+  }, [
+    initialLoadSettled,
+    startupModeSettled,
+    noticeSettled,
+    showAgreement,
+    importWelcome.loaded,
+    importWelcome.pending,
+    showImport,
+  ]);
 
   useEffect(() => {
     if (confirmOpen || !stickPromptDeferredRef.current) return;
+    if (!importWelcome.loaded || importWelcome.pending || showImport) return;
     stickPromptDeferredRef.current = false;
     void hidStickConnectedRef.current();
-  }, [confirmOpen]);
+  }, [confirmOpen, importWelcome.loaded, importWelcome.pending, showImport]);
 
   // 启动后自动开全局与恢复配置模式同一思路：后端只给判定，面板走用户点开关的同一条路径打开，
   // 播报、托盘、浮窗才与手动开启一致。配置、输入模式、声音设置都落定后再开——输入模式可能
@@ -1194,9 +1260,26 @@ export default function PanelApp() {
   useEffect(() => {
     if (startupAutoEnableCheckedRef.current) return;
     if (!initialLoadSettled || !startupModeSettled || !soundSettled) return;
+    if (
+      !agreementChecked ||
+      showAgreement ||
+      !importWelcome.loaded ||
+      importWelcome.pending ||
+      showImport
+    )
+      return;
     startupAutoEnableCheckedRef.current = true;
     void applyStartupAutoEnable();
-  }, [initialLoadSettled, startupModeSettled, soundSettled]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    initialLoadSettled,
+    startupModeSettled,
+    soundSettled,
+    agreementChecked,
+    showAgreement,
+    importWelcome.loaded,
+    importWelcome.pending,
+    showImport,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 协议没同意时后端判定为否；同意后 handleAgreed 再问一次。
   async function applyStartupAutoEnable() {
@@ -1535,8 +1618,8 @@ export default function PanelApp() {
     }
   }
 
-  async function handleInstallDriver() {
-    if (interceptionInstalled === 'pending_reboot') {
+  async function handleInstallDriver(installed = interceptionInstalled) {
+    if (installed === 'pending_reboot') {
       await confirm({
         title: '请重启电脑',
         description: (
@@ -1572,6 +1655,7 @@ export default function PanelApp() {
     if (!ok) return;
     try {
       await invoke('install_driver');
+      await refreshAppStatus();
     } catch (e) {
       toast.error(`安装失败：${e}`);
       return;
@@ -1583,7 +1667,7 @@ export default function PanelApp() {
           驱动安装程序已启动。如系统弹出「可能未正确安装此程序」提示，请点击「已正确安装此程序」。
           <br />
           <br />
-          <strong>安装完成后请重启电脑</strong>，重启后再次切换到游戏模式即可生效。
+          <strong>安装完成后请重启电脑</strong>。当前已切换为通用模式，重启生效前不能启用游戏模式。
           <br />
           <br />
           {WINDOWS_RESTART_HINT}
@@ -1620,6 +1704,10 @@ export default function PanelApp() {
   // 启动没落定前不问，落定后那次自查会补上；横版下切不过去，只提示不弹确认。
   async function handleHidStickConnected() {
     if (stickPromptingRef.current || !startupModeSettled) return;
+    if (!importWelcome.loaded || importWelcome.pending || showImport) {
+      stickPromptDeferredRef.current = true;
+      return;
+    }
     const status = await refreshAppStatus();
     if (!status?.hid_stick_present || status.input_mode === 'hidstick') return;
     if (switchingMode || showAgreement) return;
@@ -1657,10 +1745,17 @@ export default function PanelApp() {
     if (switchingMode || target === inputMode) return;
     setSwitchingMode(true);
     try {
-      // Interception 驱动：未安装则先安装并退出（要求重启电脑）
-      if (target === 'interception' && interceptionInstalled !== 'installed') {
-        await handleInstallDriver();
-        return;
+      if (target === 'interception') {
+        const status = await invoke<AppStatus>('get_app_status');
+        applyAppStatus(status);
+        if (status.interception_installed !== 'not_installed' && status.interception_issue) {
+          await showInterceptionIssue(status.interception_issue);
+          return;
+        }
+        if (status.interception_installed === 'not_installed') {
+          await handleInstallDriver(status.interception_installed);
+          return;
+        }
       }
 
       if ((target === 'interception' || target === 'ddsimple') && !elevated) {
@@ -1699,10 +1794,22 @@ export default function PanelApp() {
         );
       }
     } catch (e) {
+      await refreshAppStatus();
       toast.error(`切换失败：${e}`);
     } finally {
       setSwitchingMode(false);
     }
+  }
+
+  async function showInterceptionIssue(issue: string) {
+    await invoke('set_input_mode', { mode: 'sendinput' });
+    await refreshAppStatus();
+    await confirm({
+      title: '游戏模式尚未就绪',
+      description: `${issue} 当前使用通用模式，游戏模式未启用。`,
+      confirmText: '知道了',
+      cancelText: null,
+    });
   }
 
   function pushRules(updater: (prev: BurstRule[]) => BurstRule[]) {
@@ -2626,7 +2733,13 @@ export default function PanelApp() {
   function handleAgreed() {
     setShowAgreement(false);
     // 启动收尾那一问还没问到时交给它，免得声音设置没读到就开、按默认值播报
-    if (startupAutoEnableCheckedRef.current) void applyStartupAutoEnable();
+    if (
+      startupAutoEnableCheckedRef.current &&
+      importWelcome.loaded &&
+      !importWelcome.pending &&
+      !showImport
+    )
+      void applyStartupAutoEnable();
   }
 
   return (
@@ -3102,29 +3215,33 @@ export default function PanelApp() {
         onClose={() => setModePickerOpen(false)}
         target={modeBtnRef}
         location="bottom-left"
-        items={(['interception', 'sendinput', 'ddsimple', 'hidstick'] as InputMode[]).map((m) => ({
-          label: INPUT_MODE_LABELS[m],
-          subtitle:
-            m === 'sendinput'
-              ? '最简单，但很多游戏不响应'
-              : m === 'interception'
-                ? interceptionInstalled === 'installed'
-                  ? elevated
-                    ? '推荐 · 管理员已就绪'
-                    : '推荐 · 需要管理员'
-                  : interceptionInstalled === 'pending_reboot'
-                    ? '推荐 · 驱动待重启生效'
-                    : '推荐 · 点击安装驱动'
-                : m === 'hidstick'
-                  ? hidStickPresent
-                    ? '外设 · 已插入'
-                    : '外设 · 需插入外设驱动'
-                  : elevated
-                    ? '备用 · 内置DD驱动，无需重启'
-                    : '备用 · 需要管理员',
-          active: inputMode === m,
-          onClick: () => void selectInputMode(m),
-        }))}
+        items={(['interception', 'sendinput', 'ddsimple', 'hidstick'] as InputMode[])
+          .filter((m) => m !== 'hidstick' || hidStickPresent)
+          .map((m) => ({
+            label: INPUT_MODE_LABELS[m],
+            subtitle:
+              m === 'sendinput'
+                ? '普通软件与网页 · 大部分游戏无效'
+                : m === 'interception'
+                  ? interceptionIssue && interceptionInstalled !== 'not_installed'
+                    ? '驱动未就绪 · 点击查看原因'
+                    : interceptionInstalled === 'installed'
+                      ? elevated
+                        ? '推荐 · 管理员已就绪'
+                        : '推荐 · 需要管理员'
+                      : interceptionInstalled === 'pending_reboot'
+                        ? '推荐 · 驱动待重启生效'
+                        : '推荐 · 点击安装驱动'
+                  : m === 'hidstick'
+                    ? hidStickPresent
+                      ? '外设 · 已插入'
+                      : '外设 · 需插入外设驱动'
+                    : elevated
+                      ? '备用 · 内置DD驱动，无需重启'
+                      : '备用 · 需要管理员',
+            active: inputMode === m,
+            onClick: () => void selectInputMode(m),
+          }))}
       />
 
       <ContextMenu
@@ -3186,6 +3303,13 @@ export default function PanelApp() {
               setShowTourCatalog(true);
             },
           },
+          {
+            label: '导入其他助手配置',
+            onClick: () => {
+              setMenuOpen(false);
+              setShowImport(true);
+            },
+          },
           { label: '检查更新', onClick: handleCheckUpdate },
           {
             // 固定看当前运行版本做了什么，来源是随包内联的 CHANGELOG；
@@ -3245,6 +3369,7 @@ export default function PanelApp() {
           elevated={elevated}
           closeBehavior={closeBehaviorPreference}
           interceptionInstalled={interceptionInstalled}
+          interceptionIssue={interceptionIssue}
           ddHidInstalled={ddHidInstalled}
           hidStickPresent={hidStickPresent}
           autostartEnabled={sysInfo.autostart_enabled}
@@ -3345,7 +3470,13 @@ export default function PanelApp() {
         <TourRunner
           tour={activeTour}
           host={tourHost}
-          paused={showAgreement || updateNotice !== null || confirmOpen}
+          paused={
+            showAgreement ||
+            updateNotice !== null ||
+            confirmOpen ||
+            showImport ||
+            importWelcome.pending
+          }
           onExit={handleTourExit}
         />
       )}

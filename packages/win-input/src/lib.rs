@@ -382,15 +382,15 @@ pub fn init_backend(mode: InputMode) {
     }
     // 外设驱动独占一个串口，切去任何一档（含重新选外设模式）都先关掉旧连接
     release_hidstick();
+    release_inactive_driver_backends(mode);
 
     match mode {
         InputMode::Interception => {
-            let backend_cell =
-                INTERCEPTION_BACKEND.get_or_init(|| Mutex::new(InterceptionBackend::new()));
+            let backend_cell = INTERCEPTION_BACKEND.get_or_init(|| Mutex::new(None));
             let mut guard = revive(backend_cell.lock());
-            if guard.is_none() {
-                *guard = InterceptionBackend::new();
-            }
+            // 切换前已停连发并释放按键；重建 context，避免复用拔插前的设备编号。
+            *guard = None;
+            *guard = InterceptionBackend::new();
             if guard.is_some() {
                 current.store(MODE_INTERCEPTION, std::sync::atomic::Ordering::SeqCst);
                 info!("输入后端已切换为 Interception 驱动模式");
@@ -405,7 +405,7 @@ pub fn init_backend(mode: InputMode) {
                 current.store(MODE_SENDINPUT, std::sync::atomic::Ordering::SeqCst);
                 return;
             };
-            let cell = DD_SIMPLE_BACKEND.get_or_init(|| Mutex::new(DdSimpleBackend::new(dir)));
+            let cell = DD_SIMPLE_BACKEND.get_or_init(|| Mutex::new(None));
             let mut guard = revive(cell.lock());
             if guard.is_none() {
                 *guard = DdSimpleBackend::new(dir);
@@ -438,19 +438,85 @@ pub fn init_backend(mode: InputMode) {
             }
         }
         InputMode::SendInput => {
-            if let Some(lock) = DD_SIMPLE_BACKEND.get() {
-                if revive(lock.lock()).take().is_some() {
-                    info!("DD Simple 后端已释放");
-                }
-            }
-            if let Some(lock) = INTERCEPTION_BACKEND.get() {
-                if revive(lock.lock()).take().is_some() {
-                    info!("Interception 后端已释放");
-                }
-            }
             current.store(MODE_SENDINPUT, std::sync::atomic::Ordering::SeqCst);
             info!("输入后端已切换为 SendInput 模式");
         }
+    }
+}
+
+/// 只读探测 DD 设备是否被占用，不加载 SDK、不安装驱动、不发送按键。
+#[cfg(windows)]
+pub fn dd_channel_status() -> (bool, String) {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND,
+        ERROR_SHARING_VIOLATION, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING,
+    };
+    let cell = DD_SIMPLE_BACKEND.get_or_init(|| Mutex::new(None));
+    // 探测期间持锁，避免临时独占句柄与本应用正在初始化的 SDK 竞争。
+    let backend = revive(cell.lock());
+    if backend.is_some() {
+        return (false, "DD 通道由本应用使用。切换至其他模式或正常退出会卸载本应用加载的 SDK；SDK 内部和系统驱动状态不等同于 DLL 引用状态。".into());
+    }
+    let path: Vec<u16> = r"\\.\dd63330".encode_utf16().chain(Some(0)).collect();
+    // SAFETY: path NUL 结尾；仅打开设备，不发 IOCTL；share=0 与随包 SDK 一致。
+    let handle = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            0x80000000,
+            0,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle != INVALID_HANDLE_VALUE {
+        // SAFETY: handle 来自成功的 CreateFileW，探测结束立即归还。
+        unsafe { CloseHandle(handle) };
+        return (
+            false,
+            "DD 设备可打开，探测句柄已释放；尚未加载 SDK，不能据此保证 DD 初始化或游戏兼容性。"
+                .into(),
+        );
+    }
+    // SAFETY: 紧随失败的 CreateFileW 读取当前线程错误。
+    match unsafe { GetLastError() } {
+        ERROR_SHARING_VIOLATION => (true, "DD 设备被占用。请正常退出本应用及其他使用 DD 的程序后重试；卸载 DLL 不保证第三方 SDK 内部的句柄已经关闭。".into()),
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => (false, "未发现 DD 63330 运行设备；SDK 尚未初始化时可能正常，不表示需要清理 DDHID 63340。".into()),
+        ERROR_ACCESS_DENIED => (true, "DD 设备访问被拒绝。请检查管理员权限、其他 DD 程序占用和系统安全策略。".into()),
+        code => (true, format!("DD 设备探测失败（Win32 错误码 {code}），无法确认是否被占用。")),
+    }
+}
+
+/// 调用方须先停止调度并经旧后端释放按键，再释放不再使用的驱动通道。
+#[cfg(windows)]
+fn release_inactive_driver_backends(next: InputMode) {
+    if next != InputMode::DdSimple {
+        if let Some(cell) = DD_SIMPLE_BACKEND.get() {
+            if revive(cell.lock()).take().is_some() {
+                info!("DD Simple DLL 已卸载，不再保留本应用的后端引用");
+            }
+        }
+    }
+    if next != InputMode::Interception {
+        if let Some(cell) = INTERCEPTION_BACKEND.get() {
+            if revive(cell.lock()).take().is_some() {
+                info!("Interception context 已释放");
+            }
+        }
+    }
+}
+
+/// 停调度、释放按键后调用。OnceLock 中的静态后端不会在正常退出时自动析构。
+#[cfg(windows)]
+pub fn release_backends() {
+    release_hidstick();
+    release_inactive_driver_backends(InputMode::SendInput);
+    if let Some(mode) = CURRENT_MODE.get() {
+        mode.store(MODE_SENDINPUT, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

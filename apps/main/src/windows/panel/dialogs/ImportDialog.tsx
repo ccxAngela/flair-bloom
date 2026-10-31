@@ -9,6 +9,7 @@ interface FoundConfig {
   path: string;
   source_app: string;
   display_name: string;
+  source_profile_index: number | null;
 }
 
 interface ImportPreview {
@@ -17,6 +18,8 @@ interface ImportPreview {
   rule_count: number;
   skipped_count: number;
   interval_ms: number;
+  interval_max_ms: number;
+  warnings: string[];
   global_toggle: KeyId | null;
   global_stop: KeyId | null;
   panel_toggle: KeyId | null;
@@ -52,6 +55,7 @@ export default function ImportDialog({ onClose, onImported }: Props) {
   const [scanDone, setScanDone] = useState(false);
   const [customDir, setCustomDir] = useState('');
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedSourceProfile, setSelectedSourceProfile] = useState<number | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
@@ -59,14 +63,15 @@ export default function ImportDialog({ onClose, onImported }: Props) {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState('');
   const customInputRef = useRef<HTMLInputElement>(null);
+  const previewRequest = useRef(0);
 
   const runScan = useCallback(async (dirs: string[]) => {
     setScanning(true);
     try {
       const result = await invoke<FoundConfig[]>('scan_import_configs', { dirs });
       setFound((prev) => {
-        const existing = new Set(prev.map((f) => f.path));
-        return [...prev, ...result.filter((f) => !existing.has(f.path))];
+        const existing = new Set(prev.map(configIdentity));
+        return [...prev, ...result.filter((f) => !existing.has(configIdentity(f)))];
       });
     } catch {
       // 静默失败，展示空列表即可
@@ -81,20 +86,28 @@ export default function ImportDialog({ onClose, onImported }: Props) {
     void runScan([]);
   }, [runScan]);
 
-  async function loadPreview(path: string) {
+  async function loadPreview(
+    path: string,
+    sourceProfileIndex: number | null = null,
+    suggestedName?: string,
+  ) {
+    const request = ++previewRequest.current;
     setSelectedPath(path);
+    setSelectedSourceProfile(sourceProfileIndex);
     setPreview(null);
     setPreviewError('');
     setProfileName('');
     setPreviewLoading(true);
     try {
-      const p = await invoke<ImportPreview>('preview_import', { path });
+      const p = await invoke<ImportPreview>('preview_import', { path, sourceProfileIndex });
+      if (request !== previewRequest.current) return;
       setPreview(p);
-      setProfileName(p.suggested_name);
+      setProfileName(suggestedName ?? p.suggested_name);
     } catch (e) {
+      if (request !== previewRequest.current) return;
       setPreviewError(String(e));
     } finally {
-      setPreviewLoading(false);
+      if (request === previewRequest.current) setPreviewLoading(false);
     }
   }
 
@@ -102,7 +115,7 @@ export default function ImportDialog({ onClose, onImported }: Props) {
     const dir = customDir.trim();
     if (!dir) return;
     // 先尝试作为文件直接预览
-    if (dir.toLowerCase().endsWith('.json')) {
+    if (/\.(json|ini)$/i.test(dir)) {
       await loadPreview(dir);
       return;
     }
@@ -113,8 +126,8 @@ export default function ImportDialog({ onClose, onImported }: Props) {
         setPreviewError('该目录下未找到已知格式的配置文件');
       } else {
         setFound((prev) => {
-          const existing = new Set(prev.map((f) => f.path));
-          return [...prev, ...result.filter((f) => !existing.has(f.path))];
+          const existing = new Set(prev.map(configIdentity));
+          return [...prev, ...result.filter((f) => !existing.has(configIdentity(f)))];
         });
         setPreviewError('');
       }
@@ -133,6 +146,7 @@ export default function ImportDialog({ onClose, onImported }: Props) {
       const profile = await invoke<{ meta: { name: string } }>('import_external_config', {
         path: selectedPath,
         profileName: profileName.trim(),
+        sourceProfileIndex: selectedSourceProfile,
       });
       onImported(profile.meta.name);
     } catch (e) {
@@ -142,13 +156,21 @@ export default function ImportDialog({ onClose, onImported }: Props) {
     }
   }
 
-  const canImport = !!selectedPath && !!preview && profileName.trim().length > 0 && !importing;
+  const canImport =
+    !!selectedPath &&
+    !!preview &&
+    preview.rule_count > 0 &&
+    profileName.trim().length > 0 &&
+    !importing &&
+    !previewLoading;
 
   return (
     <div className="modal-mask" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal import-modal">
         <h2>导入外部配置</h2>
-        <p className="modal-desc">从第三方按键助手（如丐帮高手）读取配置，一键转换为气质花配置。</p>
+        <p className="modal-desc">
+          支持丐帮高手、衍天高手、极简按键和小叽按键。多个方案可分别选择导入，转换差异会在预览中说明。
+        </p>
 
         {/* 扫描结果列表 */}
         <div className="import-section">
@@ -168,14 +190,16 @@ export default function ImportDialog({ onClose, onImported }: Props) {
           </div>
           <div className="found-list">
             {found.length === 0 && scanDone && !scanning && (
-              <p className="found-empty">未在桌面、下载目录找到已知格式的配置文件</p>
+              <p className="found-empty">
+                未在桌面、下载及衍天高手默认配置目录找到已知格式的配置文件
+              </p>
             )}
             {found.length === 0 && scanning && <p className="found-empty scanning">正在扫描…</p>}
             {found.map((f) => (
               <button
-                key={f.path}
-                className={`found-item${selectedPath === f.path ? ' selected' : ''}`}
-                onClick={() => loadPreview(f.path)}
+                key={configIdentity(f)}
+                className={`found-item${selectedPath === f.path && selectedSourceProfile === f.source_profile_index ? ' selected' : ''}`}
+                onClick={() => loadPreview(f.path, f.source_profile_index, f.display_name)}
               >
                 <span className="found-app">{f.source_app}</span>
                 <span className="found-name">{f.display_name}</span>
@@ -227,15 +251,20 @@ export default function ImportDialog({ onClose, onImported }: Props) {
                   <span className="preview-value">{preview.source_app}</span>
                   <span className="preview-label">规则数量</span>
                   <span className="preview-value">
-                    {preview.rule_count} 条长按连发
+                    {preview.rule_count} 条规则
                     {preview.skipped_count > 0 && (
                       <span className="preview-warn">
-                        （已截取前 {MAX_RULES} 条，丢弃 {preview.skipped_count} 条）
+                        （跳过 {preview.skipped_count} 条不支持或超出上限的规则）
                       </span>
                     )}
                   </span>
                   <span className="preview-label">连发间隔</span>
-                  <span className="preview-value">{preview.interval_ms} ms</span>
+                  <span className="preview-value">
+                    {preview.interval_ms === preview.interval_max_ms
+                      ? preview.interval_ms
+                      : `${preview.interval_ms}–${preview.interval_max_ms}`}{' '}
+                    ms
+                  </span>
                   {preview.global_toggle && (
                     <>
                       <span className="preview-label">全局开启键</span>
@@ -255,6 +284,11 @@ export default function ImportDialog({ onClose, onImported }: Props) {
                     </>
                   )}
                 </div>
+                {preview.warnings.map((warning) => (
+                  <p key={warning} className="preview-warn">
+                    {warning}
+                  </p>
+                ))}
                 <div className="profile-name-row">
                   <label className="profile-name-label">配置名称</label>
                   <input
@@ -292,5 +326,6 @@ export default function ImportDialog({ onClose, onImported }: Props) {
   );
 }
 
-// MAX_RULES 与 Rust 侧保持同步
-const MAX_RULES = 64;
+function configIdentity(config: FoundConfig): string {
+  return `${config.path}#${config.source_profile_index ?? ''}`;
+}

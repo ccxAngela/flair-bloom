@@ -225,6 +225,14 @@ pub fn set_input_mode(
         let input_mode =
             InputMode::from_str(&mode).ok_or_else(|| format!("未知输入模式: {mode}"))?;
 
+        if input_mode == InputMode::Interception {
+            if let Some(issue) = crate::commands::status::collect_interception_health().issue {
+                switch_input_backend(&app, &state.0, InputMode::SendInput);
+                crate::commands::status::emit_status_changed(&app);
+                return Err(format!("{issue} 已回退到通用模式，游戏模式未启用。"));
+            }
+        }
+
         if input_mode.requires_admin() && !win_driver::elevation::is_process_elevated() {
             return Err(format!(
                 "{} 需要管理员权限，请先以管理员身份重启应用",
@@ -240,6 +248,12 @@ pub fn set_input_mode(
         }
 
         crate::commands::status::emit_status_changed(&app);
+        if win_input::current_mode() != input_mode {
+            return Err(match input_mode {
+                InputMode::DdSimple => "DD 驱动通道未就绪，已回退通用模式。请退出其他使用 DD 的程序后重试；如仍失败，请正常退出本应用后重开，并在诊断修复中检查驱动残留。".into(),
+                _ => "输入通道初始化失败，已回退通用模式；请刷新诊断并检查设备连接或重启 Windows。".into(),
+            });
+        }
         Ok(())
     }
     #[cfg(not(windows))]

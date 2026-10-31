@@ -241,6 +241,74 @@ pub fn is_interception_service(name: &str, expected_sys: &str) -> bool {
     }
 }
 
+/// 读取当前内核键鼠类设备编号。编号可因拔插持续增长，不能用当前在线设备数量代替最高编号。
+#[cfg(windows)]
+pub fn input_class_indices(class: &str) -> Result<Vec<u32>, String> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS,
+    };
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE,
+    };
+    let path = wide(&format!(r"HARDWARE\DEVICEMAP\{class}"));
+    let mut key: HKEY = std::ptr::null_mut();
+    // SAFETY: path NUL 结尾，key 是栈上出参。
+    let result = unsafe {
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            path.as_ptr(),
+            0,
+            KEY_QUERY_VALUE,
+            &mut key,
+        )
+    };
+    if result == ERROR_FILE_NOT_FOUND {
+        return Ok(Vec::new());
+    }
+    if result != ERROR_SUCCESS {
+        return Err(format!("无法读取 {class} 设备编号（错误码 {result}）"));
+    }
+    let mut indices = Vec::new();
+    let mut index = 0;
+    let result = loop {
+        let mut name = [0u16; 1024];
+        let mut len = name.len() as u32;
+        // SAFETY: key 有效；name 容量由 len 指定，其余字段不读取。
+        let result = unsafe {
+            RegEnumValueW(
+                key,
+                index,
+                name.as_mut_ptr(),
+                &mut len,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if result == ERROR_NO_MORE_ITEMS {
+            break Ok(indices);
+        }
+        if result != ERROR_SUCCESS {
+            break Err(format!("无法枚举 {class} 设备编号（错误码 {result}）"));
+        }
+        let name = String::from_utf16_lossy(&name[..len as usize]);
+        if let Some(id) = input_class_index(&name, class) {
+            indices.push(id);
+        }
+        index += 1;
+    };
+    // SAFETY: key 来自成功的 RegOpenKeyExW。
+    unsafe { RegCloseKey(key) };
+    result
+}
+
+#[cfg(any(windows, test))]
+fn input_class_index(name: &str, class: &str) -> Option<u32> {
+    let prefix = format!(r"\Device\{class}");
+    name.strip_prefix(&prefix)?.parse().ok()
+}
+
 /// 在指定根键下写入 REG_SZ 值，子键不存在则创建。
 #[cfg(windows)]
 pub fn write_reg_sz(root: RegRoot, subkey: &str, name: &str, value: &str) -> Result<(), String> {
@@ -330,4 +398,33 @@ pub fn delete_reg_value(root: RegRoot, subkey: &str, name: &str) -> Result<(), S
         return Err(format!("删除注册表值失败（错误码 {r}）"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod input_class_tests {
+    use super::*;
+
+    #[test]
+    fn class_indices_include_overflow_even_with_few_devices() {
+        assert_eq!(
+            input_class_index(r"\Device\KeyboardClass10", "KeyboardClass"),
+            Some(10)
+        );
+        assert_eq!(
+            input_class_index(r"\Device\PointerClass12", "PointerClass"),
+            Some(12)
+        );
+        assert_eq!(
+            input_class_index(r"\Device\KeyboardClass9", "KeyboardClass"),
+            Some(9)
+        );
+        assert_eq!(
+            input_class_index(r"\Device\PointerClass0", "KeyboardClass"),
+            None
+        );
+        assert_eq!(
+            input_class_index(r"\Device\KeyboardClassX", "KeyboardClass"),
+            None
+        );
+    }
 }

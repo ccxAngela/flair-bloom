@@ -469,6 +469,24 @@ function buildDisplayIssues(items: DiagnosticItem[]): DisplayIssue[] {
 }
 
 function toDisplayIssue(item: DiagnosticItem): DisplayIssue {
+  if (item.id === 'ddsimple.channel') {
+    return {
+      id: item.id,
+      title: 'DD 通道暂不可用',
+      detail: item.detail,
+      severity: item.severity,
+      action: null,
+    };
+  }
+  if (item.id === 'interception.runtime') {
+    return {
+      id: item.id,
+      title: '游戏模式尚未就绪',
+      detail: item.detail,
+      severity: item.severity,
+      action: null,
+    };
+  }
   if (item.recommended_action === 'repair_dd_hid_residue' || item.id.startsWith('dd_hid.')) {
     return {
       id: 'dd_hid_residue',

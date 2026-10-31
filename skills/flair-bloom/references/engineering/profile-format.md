@@ -52,7 +52,15 @@
 
 ## 配置文件管理
 
-后端命令：`save_profile` / `load_profile` / `list_profiles` / `init_default_profile` / `get_active_profile_path` / `rename_profile` / `delete_profile` / `fork_active_profile`；外部导入 `commands/import_profile.rs`（支持丐帮高手 `config.json` 扫描、预览、导入）。默认配置受保护：修改默认配置自动 fork 成新配置。
+后端命令：`save_profile` / `load_profile` / `list_profiles` / `init_default_profile` / `get_active_profile_path` / `rename_profile` / `delete_profile` / `fork_active_profile`；外部导入 `commands/import_profile.rs` 支持丐帮高手、衍天高手、极简按键、小叽按键的扫描、预览、导入。默认配置受保护：修改默认配置自动 fork 成新配置。`.qzh` 欢迎自行研究解析与开发兼容转换工具，文件封装不构成禁止兼容研究的声明。
+
+解析器仅保留独立实现的必要格式识别和转换规则，测试使用合成样例；不收录第三方源码、程序、真实配置、协议或授权记录。衍天默认位置为 `%APPDATA%\TheCelestialDiviner\config.json`；极简和小叽使用便携程序目录中的 INI / JSON。扫描桌面、下载及默认数据目录，按已知工具名只读解析快捷方式以定位程序或工作目录，不执行或 Resolve 目标程序。多档位按文件路径 + `source_profile_index` 去重，预览和导入携带同一档位；直接指定文件时读取活动档位，旧衍天格式回退镜像，避免重复合并。
+
+字典键 `K:VK:EXT` / `M:MouseInput` 对应触发键，单目标的 Hold / Toggle 转为规则，Rotate 转互斥组，保留方案和目标的启用状态。`GlobalSwitch` / `IndependentClose` 转全局启停键；双宏、多目标轮流执行、修饰键组合、小键盘扩展 Enter 等无法等价表达的动作跳过并在预览中说明。周期是原 `HoldMs + IntervalMs`，钳到本软件范围，独立按压时长无法复现。预览显示周期范围与转换警告，不将所有规则标作长按。文件大小在读取前检查 4 MB 上限，支持 UTF-8 BOM；导入仍经 `activate_profile_file`，不导入源应用的全局运行状态、驱动和界面设置。
+
+极简按键列表迁移为默认停用的同键长按规则，并提示顺序循环无法复现；启动／停止键可迁移，NUM0～NUM9 对应源格式主键区数字。小叽按配置 ID 选择方案，按压规则保留，独立切换转互斥组，自动开关规则迁为默认停用的同键切换规则；持续按住、顺序切换、固定点点击和宏循环跳过。小叽周期计入 5 ms 按压宽度。INI 支持 UTF-16LE BOM 与 ASCII 字段，JSON 支持 UTF-8 BOM；千机魔盒无可核验样例，不注册解析器。
+
+首装导入邀请：协议同意前读取既有 `agreed` 与 `import_welcome_seen/pending`，新装用户先持久化 pending；同意协议并完成启动状态恢复后询问扫描或跳过，选过即标 seen。老用户不会因协议／教程升级收到邀请，中途退出的新用户下次仍可选择。导入邀请、导入窗口结束前不启动教程、外设邀请或自动开启全局；主菜单也有直接入口。扫描不写源文件，确认导入后才生成新的 `.qzh`。
 
 ## 用户协议记录
 

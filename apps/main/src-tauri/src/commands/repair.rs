@@ -169,6 +169,20 @@ pub async fn diagnose_environment(app: AppHandle) -> Result<RepairReport, String
         items.extend(diagnose_install_prerequisites(&app).await);
         items.extend(diagnose_dd_hid(&app));
         items.extend(diagnose_interception(&app));
+        let (dd_blocked, dd_detail) = win_input::dd_channel_status();
+        items.push(DiagnosticItem {
+            id: "ddsimple.channel".into(),
+            category: "DD 驱动".into(),
+            label: "运行设备与占用".into(),
+            severity: if dd_blocked {
+                Severity::Warn
+            } else {
+                Severity::Info
+            },
+            status: ItemStatus::Unknown,
+            detail: dd_detail,
+            recommended_action: None,
+        });
         items.extend(diagnose_hidstick());
     }
 
@@ -504,8 +518,33 @@ fn diagnose_dd_hid(_app: &AppHandle) -> Vec<DiagnosticItem> {
 }
 
 #[cfg(windows)]
+fn interception_binary_missing(service: &str) -> bool {
+    let Some(raw) = registry::read_service_image_path(service) else {
+        return false;
+    };
+    let raw = raw.trim_matches('"');
+    let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from);
+    let path = if let Some(relative) = raw
+        .strip_prefix(r"\systemroot\")
+        .or_else(|| raw.strip_prefix(r"%systemroot%\"))
+    {
+        root.map(|p| p.join(relative))
+    } else if raw.starts_with(r"system32\") {
+        root.map(|p| p.join(raw))
+    } else {
+        let raw = raw.strip_prefix(r"\??\").unwrap_or(raw);
+        let path = std::path::PathBuf::from(raw);
+        (path.is_absolute() && !raw.contains('%')).then_some(path)
+    };
+    path.is_some_and(|path| {
+        std::fs::metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
+#[cfg(windows)]
 fn diagnose_interception(_app: &AppHandle) -> Vec<DiagnosticItem> {
     let mut out = Vec::new();
+    let health = crate::commands::status::collect_interception_health();
     let api_ok = win_input::interception::is_driver_installed();
     // 仅当服务键 ImagePath 指向 Interception 的 keyboard.sys / mouse.sys 才视为残留，
     // 避免把同名第三方服务误判
@@ -515,22 +554,26 @@ fn diagnose_interception(_app: &AppHandle) -> Vec<DiagnosticItem> {
     let mouse_present_raw = registry::service_key_present("mouse");
     let foreign_kbd = kbd_present_raw && !kbd;
     let foreign_mouse = mouse_present_raw && !mouse;
+    let missing_binary = (kbd && interception_binary_missing("keyboard"))
+        || (mouse && interception_binary_missing("mouse"));
 
     out.push(DiagnosticItem {
         id: "interception.runtime".to_string(),
         category: "Interception 驱动".to_string(),
         label: "运行时可用性".to_string(),
-        severity: Severity::Info,
-        status: if api_ok {
+        severity: if health.issue.is_some()
+            && health.status != crate::commands::status::DriverStatus::NotInstalled
+        {
+            Severity::Error
+        } else {
+            Severity::Info
+        },
+        status: if health.issue.is_none() {
             ItemStatus::Ok
         } else {
             ItemStatus::Missing
         },
-        detail: if api_ok {
-            "create_context 成功".to_string()
-        } else {
-            "create_context 返回 null（驱动未装或被禁用）".to_string()
-        },
+        detail: health.detail,
         recommended_action: None,
     });
 
@@ -543,7 +586,7 @@ fn diagnose_interception(_app: &AppHandle) -> Vec<DiagnosticItem> {
         id: "interception.services".to_string(),
         category: "Interception 驱动".to_string(),
         label: "keyboard / mouse 服务键".to_string(),
-        severity: if (kbd || mouse) && !api_ok {
+        severity: if missing_binary && !api_ok {
             Severity::Error
         } else {
             Severity::Info
@@ -554,11 +597,9 @@ fn diagnose_interception(_app: &AppHandle) -> Vec<DiagnosticItem> {
             (false, _) => ItemStatus::Missing,
         },
         detail,
-        recommended_action: if (kbd || mouse) && !api_ok {
-            Some("repair_interception_residue".to_string())
-        } else {
-            None
-        },
+        // 通道打不开也可能是首次安装待重启或被占用，只有确证驱动文件缺失才推荐清残留。
+        recommended_action: (missing_binary && !api_ok)
+            .then(|| "repair_interception_residue".into()),
     });
 
     out
@@ -573,6 +614,7 @@ fn diagnose_hidstick() -> Vec<DiagnosticItem> {
     const CATEGORY: &str = "外设驱动";
     let in_use = win_input::hidstick_in_use();
     let scans = scan_ports(in_use.as_ref().map(|(p, f)| (p.as_str(), f.as_str())));
+    crate::bootstrap::input::remember_verified_sticks(&scans);
     let stick = scans.iter().find(|s| s.is_stick());
 
     let mut out = vec![DiagnosticItem {
@@ -1026,12 +1068,24 @@ async fn run_interception_repair(app: AppHandle) -> Result<RepairOutcome, String
         });
     }
 
+    let kbd_missing = kbd_before && interception_binary_missing("keyboard");
+    let mouse_missing = mouse_before && interception_binary_missing("mouse");
+    if !kbd_missing && !mouse_missing {
+        return Ok(RepairOutcome {
+            success: false,
+            pending_reboot: true,
+            summary: "未确证驱动文件缺失，保留服务注册。首次安装请先重启 Windows；如已重启，请退出其他 Interception 程序排除独占，再诊断。".into(),
+            steps: vec![RepairStep { name: "检查驱动文件".into(), status: StepStatus::Skipped, detail: "通道不可用不能单独证明服务是残留，未执行删除。".into() }],
+            backup_dir: None,
+        });
+    }
+
     let backup_lit = win_driver::powershell::ps_single_quoted(&backup.display().to_string());
     // 注意：Windows 自带的 `kbdclass` / `mouclass` 服务名是别的；
     // Interception 注册的是 `keyboard` / `mouse`（小写、无后缀），与系统服务并存。
     // 这里只删确认是 Interception 的 key，由 PowerShell 脚本再次校验 ImagePath
     // 兜底，确保即便诊断与执行之间发生变化也不会误删。
-    let targets: Vec<String> = [("keyboard", kbd_before), ("mouse", mouse_before)]
+    let targets: Vec<String> = [("keyboard", kbd_missing), ("mouse", mouse_missing)]
         .iter()
         .filter_map(|(n, ok)| if *ok { Some((*n).to_string()) } else { None })
         .collect();
@@ -1075,19 +1129,20 @@ async fn run_interception_repair(app: AppHandle) -> Result<RepairOutcome, String
         ),
         boolean_removal_step(
             "删除 keyboard 服务键",
-            kbd_before,
+            kbd_missing,
             kbd_after,
             "keyboard 服务键",
         ),
         boolean_removal_step(
             "删除 mouse 服务键",
-            mouse_before,
+            mouse_missing,
             mouse_after,
             "mouse 服务键",
         ),
     ];
 
-    let success = !kbd_after && !mouse_after && matches!(exit, Ok(0));
+    let success =
+        (!kbd_missing || !kbd_after) && (!mouse_missing || !mouse_after) && matches!(exit, Ok(0));
     let summary = if success {
         "Interception 残留已清理，请重启电脑后再尝试安装".to_string()
     } else {
