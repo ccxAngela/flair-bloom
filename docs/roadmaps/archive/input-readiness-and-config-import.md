@@ -1,6 +1,6 @@
 # 输入通道就绪检查与配置迁移
 
-Status: active
+Status: completed
 
 ## 决策
 
@@ -21,7 +21,7 @@ Status: active
 - [x] 首装邀请、菜单入口与文档同步。
 - [x] 独立审查并修复首装弹窗竞争、预览旧响应覆盖、重定向目录漏扫。
 - [x] 最终门禁、生产前端构建与资源校验。
-- [ ] 整理提交、推送并复核远端。
+- [x] 整理提交、推送并复核远端。
 
 ## 工期
 
@@ -36,6 +36,8 @@ Status: active
 独立审查覆盖 `v0.7.1` 以来的变更，三项问题已修复并复核关闭；未发现第三方源码副本、真实配置或授权数据进入仓库。
 
 本地通过：`cargo test --workspace`（328 通过，5 项真实环境测试忽略）、全目标全特性 Clippy、Rust 格式检查、前端 lint / 格式 / 类型检查、69 项前端测试、文档一致性、生产前端构建及打包驱动资源完整性检查。版本与 schema 未变。
+
+实现提交 `2ac152a` 已推送，远端 [Rust CI](https://github.com/x-wink/flair-bloom/actions/runs/41228589189) 与 [Coverage](https://github.com/x-wink/flair-bloom/actions/runs/41228589242) 均通过。仅推送 main 分支，没有推 tag、触发 Release 或修改版本。
 
 真实驱动首次安装、设备槽耗尽、双程序独占及外设拔插未在本轮主动制造；自动化检查不能证明游戏兼容性或 DD 同键过滤可靠。
 
