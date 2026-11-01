@@ -59,7 +59,7 @@ fn group_hold_press_pauses_running_toggle_then_release_resumes_it() {
     engine.on_key_press(KEY_H);
     assert_eq!(rec.take(), vec!["stop:a:g1", "start:h:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["h"], &["a"]));
-    // 暂停的规则仍算活跃：前端播报差分不会因插队多响。
+    // 暂停的规则仍算活跃，界面不会把让位显示成已关闭。
     assert_eq!(engine.get_active_ids(), vec!["a", "h"]);
 
     engine.on_key_release(KEY_H);

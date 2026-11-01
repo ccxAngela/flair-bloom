@@ -76,6 +76,7 @@ pub fn rehook_keyboard() {}
 
 type GlobalChangedCb = Arc<Mutex<Option<Box<dyn Fn(bool) + Send + Sync>>>>;
 type PanelToggleCb = Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>;
+type ToggleChangedCb = Arc<Mutex<Option<Box<dyn Fn(KeyId, bool) + Send + Sync>>>>;
 
 /// 关键路径锁兜底：若前一持锁者 panic 导致 Mutex 中毒,强行复活并继续。
 /// 按键工具最差故障是键盘卡死,值得给一层硬兜底；连发线程已被 catch_unwind
@@ -174,6 +175,7 @@ pub struct BurstEngine {
     on_global_changed: GlobalChangedCb,
     /// 面板显隐热键触发时调用。
     on_panel_toggle: PanelToggleCb,
+    on_toggle_changed: ToggleChangedCb,
 }
 
 /// 把 [`KeyId`] 编码为非零 `u64`，供 `dedicated_stop` 无锁缓存比较。`0` 保留给「未设置」。
@@ -216,6 +218,7 @@ impl BurstEngine {
             switching_backend: AtomicBool::new(false),
             on_global_changed: Arc::new(Mutex::new(None)),
             on_panel_toggle: Arc::new(Mutex::new(None)),
+            on_toggle_changed: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -264,6 +267,12 @@ impl BurstEngine {
         *revive(self.on_panel_toggle.lock()) = Some(Box::new(f));
     }
 
+    /// 回调在状态锁内依序调用，只能快速入队，不得阻塞或回调引擎。
+    /// 只通知用户切换规则的启停，组内让位和恢复不会重复播报。
+    pub fn set_on_toggle_changed(&self, f: impl Fn(KeyId, bool) + Send + Sync + 'static) {
+        *revive(self.on_toggle_changed.lock()) = Some(Box::new(f));
+    }
+
     pub fn set_rules(&self, rules: Vec<BurstRule>) {
         // 先换快照、再停活动。停止会自增 generation 并向调度器发 StopAll，扫掉任何「在换快照前用
         // 旧快照已经启动」的规则；若顺序反过来（先停后换），换快照后到来的物理触发会用旧快照在新
@@ -282,7 +291,7 @@ impl BurstEngine {
     }
 
     /// 当前活跃的规则 ID 集合（含被插队暂停的）：hold 模式表示触发键被按住，toggle 模式表示已开启。
-    /// 前端靠它差分播报切换规则启停，暂停 / 恢复不改变该集合，故插队不会多响。
+    /// 暂停 / 恢复不改变活跃集合，界面仍将让位的切换规则视为已开启。
     pub fn get_active_ids(&self) -> Vec<String> {
         let mut ids = revive(self.runtime.lock())
             .active_rules
@@ -504,6 +513,7 @@ impl BurstEngine {
 
     fn handle_toggle_press(&self, key: KeyId, rule: Arc<BurstRule>) -> bool {
         let stop = rule.stop_key.unwrap_or(rule.trigger_key);
+        let target = rule.target_key;
         let mut start_rule = false;
         let mut stop_ids = Vec::new();
         {
@@ -567,6 +577,9 @@ impl BurstEngine {
             }
             if start_rule {
                 self.scheduler.start_rule(rule, generation);
+            }
+            if let Some(cb) = revive(self.on_toggle_changed.lock()).as_ref() {
+                cb(target, !started);
             }
         }
         true

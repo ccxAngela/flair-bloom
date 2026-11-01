@@ -8,7 +8,7 @@ interface RuleStates {
 }
 
 export interface RuleStateSets {
-  /** running ∪ paused：播报差分靠它，暂停 / 恢复不改变集合，插队不会多响。 */
+  /** running ∪ paused：暂停 / 恢复不改变集合，界面仍显示为已开启。 */
   active: Set<string>;
   paused: Set<string>;
 }

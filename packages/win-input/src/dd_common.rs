@@ -15,14 +15,20 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, warn};
-use windows_sys::Win32::Foundation::FreeLibrary;
 use windows_sys::Win32::Foundation::HMODULE;
+use windows_sys::Win32::Foundation::{FreeLibrary, GetLastError};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
 type DdBtnFn = unsafe extern "C" fn(c_int) -> c_int;
 type DdKeyFn = unsafe extern "C" fn(c_int, c_int) -> c_int;
 type DdTodcFn = unsafe extern "C" fn(c_int) -> c_int;
 type DdWhlFn = unsafe extern "C" fn(c_int) -> c_int;
+
+pub(super) fn dd_key_was_submitted(ret: c_int) -> bool {
+    // 只有负值是在 DLL 调用驱动前返回的错误哨兵。0 也可能已产生输入；
+    // 此时撤销回灌过滤并补发 SendInput，会让同键规则把自身输出当成停止操作。
+    ret >= 0
+}
 
 fn simple_side_button_flag(button: MouseButton, is_up: bool) -> c_int {
     match (button, is_up) {
@@ -139,16 +145,21 @@ impl DdFfi {
         let flag = if is_up { 2 } else { 1 };
         // SAFETY: dd_key 已解析
         let ret = unsafe { (self.dd_key)(ddcode, flag) };
+        let os_error = if ret == 0 {
+            unsafe { GetLastError() }
+        } else {
+            0
+        };
         if first {
             info!(
-                "DD 首次注入：vk={:#x} ddcode={} flag={} ret={}",
-                vk, ddcode, flag, ret
+                "DD 首次注入：vk={:#x} ddcode={} flag={} ret={} os_error={}",
+                vk, ddcode, flag, ret, os_error
             );
+            if ret == 0 {
+                warn!("DD_key 返回 0，注入结果不确定：保留回灌过滤，不重复补发 SendInput");
+            }
         }
-        // 反汇编 dd63330.dll 确认：DD_key 注入路径直接转发 DeviceIoControl 的 BOOL
-        // （成功=1、失败=0），另有 -1（设备未打开）/ -2（ddcode 不在表内）两个错误哨兵，
-        // 故 `ret == 1` 等价于成功。
-        ret == 1
+        dd_key_was_submitted(ret)
     }
 
     /// 注入滚轮事件。`up=true` 时向上，`up=false` 时向下。

@@ -256,6 +256,24 @@ pub fn run() {
                 });
             }
 
+            // 按用户操作顺序传递切换规则启停，避免短于前端轮询周期时整段漏报。
+            // hook 线程只入队，emit 在独立任务中串行执行，避免 WebView STA 死锁及事件乱序。
+            {
+                let (tx, rx) = std::sync::mpsc::channel();
+                burst_engine.set_on_toggle_changed(move |key, started| {
+                    let _ = tx.send((key, started));
+                });
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    while let Ok((key, started)) = rx.recv() {
+                        let _ = handle.emit(
+                            "toggle-feedback",
+                            serde_json::json!({ "key": key, "started": started }),
+                        );
+                    }
+                });
+            }
+
             // 外设驱动链路断开：win-input 已自行回退 SendInput，这里只报事件。回调可能跑在调度线程上，
             // 同全局开关回调一样派发出去，不在原线程上 emit。
             #[cfg(windows)]

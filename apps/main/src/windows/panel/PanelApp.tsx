@@ -505,7 +505,6 @@ export default function PanelApp() {
   const [rules, setRules] = useState<BurstRule[]>([]);
   // 全局开关启用时轮询，驱动激活态光晕；关闭时清空，避免残留高亮。
   const { active: activeRuleIds, paused: pausedRuleIds } = useRuleStates(globalEnabled, 120);
-  const prevActiveRuleIdsRef = useRef<Set<string>>(new Set());
   const [profileName, setProfileName] = useState('defaults');
   const [profileList, setProfileList] = useState<ProfileEntry[]>([]);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -1291,44 +1290,18 @@ export default function PanelApp() {
     await setGlobal(true);
   }
 
-  // Toggle 规则启动/停止时播报语音，通过 activeRuleIds 变化检测状态翻转。
-  // activeRuleIds 是 running ∪ paused：被长按插队的规则暂停 / 恢复不改变集合，插队不会多响。
-  // 依赖 rules state 而非 ref，避免 queueMicrotask(initialLoadDone) 比 React re-render
-  // 先触发时 rulesRef 为空导致 find 失败、playToggleFeedback 永远不调用的竞态。
+  // 语音跟随引擎实际启停事件；状态轮询只负责界面，避免快速启停在两次轮询之间漏掉。
   useEffect(() => {
-    if (!initialLoadDone.current) return;
-    if (!globalEnabled) {
-      prevActiveRuleIdsRef.current = new Set();
-      return;
-    }
-    const prev = prevActiveRuleIdsRef.current;
-    const curr = activeRuleIds;
-    prevActiveRuleIdsRef.current = curr;
-
-    // 先收集本次新启动的 toggle 规则
-    const startedRules: BurstRule[] = [];
-    for (const id of curr) {
-      if (!prev.has(id)) {
-        const rule = rules.find((r) => r.id === id);
-        if (rule?.mode === 'toggle') startedRules.push(rule);
-      }
-    }
-
-    // 停止播报：被同组新规则驱逐时跳过，避免覆盖后续的「开始」提示
-    for (const id of prev) {
-      if (!curr.has(id)) {
-        const rule = rules.find((r) => r.id === id);
-        if (rule?.mode !== 'toggle') continue;
-        const displaced = rule.group != null && startedRules.some((r) => r.group === rule.group);
-        if (!displaced) playToggleFeedback(rule, false);
-      }
-    }
-
-    // 启动播报放最后，保证是 playFeedback 最终出声的那条
-    for (const rule of startedRules) {
-      playToggleFeedback(rule, true);
-    }
-  }, [activeRuleIds, globalEnabled, rules]); // eslint-disable-line react-hooks/exhaustive-deps
+    let disposed = false;
+    const unlisten = listen<{ key: KeyId; started: boolean }>('toggle-feedback', ({ payload }) => {
+      if (disposed || !initialLoadDone.current) return;
+      playToggleFeedback(payload.key, payload.started);
+    });
+    return () => {
+      disposed = true;
+      void unlisten.then((stop) => stop());
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function buildUtterance(text: string, s: SoundSettings): SpeechSynthesisUtterance {
     const utt = new SpeechSynthesisUtterance(text);
@@ -1408,13 +1381,13 @@ export default function PanelApp() {
     playFeedback(enabled ? 'start' : 'end', enabled ? s.startText : s.endText, s);
   }
 
-  function playToggleFeedback(rule: BurstRule, isStart: boolean) {
+  function playToggleFeedback(key: KeyId, isStart: boolean) {
     const s = soundRef.current;
     if (!s.enabled) return;
     if (isStart ? !s.toggleStartEnabled : !s.toggleEndEnabled) return;
     const slot: SoundSlot = isStart ? 'toggleStart' : 'toggleEnd';
     const template = (isStart ? s.toggleStartText : s.toggleEndText) ?? '';
-    playFeedback(slot, template.split('${key}').join(keyLabel(rule.target_key)), s);
+    playFeedback(slot, template.split('${key}').join(keyLabel(key)), s);
   }
 
   function previewSound(slot: SoundSlot) {

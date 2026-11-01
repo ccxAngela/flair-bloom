@@ -57,6 +57,56 @@ fn toggle_same_key_starts_then_stops_on_next_press() {
 }
 
 #[test]
+fn rapid_toggle_emits_start_and_stop_even_when_poll_would_see_empty_state() {
+    let key = KeyId::Keyboard(0x46);
+    let (engine, _) = setup(vec![rule("f", BurstMode::Toggle, key, key)]);
+    let feedback = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = feedback.clone();
+    engine.set_on_toggle_changed(move |key, started| {
+        recorded.lock().unwrap().push((key, started));
+    });
+
+    engine.on_key_press(key);
+    engine.on_key_release(key);
+    engine.on_key_press(key);
+
+    assert!(engine.get_active_ids().is_empty());
+    assert_eq!(*feedback.lock().unwrap(), vec![(key, true), (key, false)]);
+}
+
+#[test]
+fn toggle_group_displacement_and_hold_preemption_do_not_emit_extra_feedback() {
+    let a_key = KeyId::Keyboard(0x41);
+    let b_key = KeyId::Keyboard(0x42);
+    let hold_key = KeyId::Keyboard(0x48);
+    let mut a = rule("a", BurstMode::Toggle, a_key, a_key);
+    let mut b = rule("b", BurstMode::Toggle, b_key, b_key);
+    let mut hold = rule("hold", BurstMode::Hold, hold_key, hold_key);
+    for r in [&mut a, &mut b, &mut hold] {
+        r.group = Some("g".into());
+    }
+    let (engine, _) = setup(vec![a, b, hold]);
+    let feedback = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = feedback.clone();
+    engine.set_on_toggle_changed(move |key, started| {
+        recorded.lock().unwrap().push((key, started));
+    });
+
+    engine.on_key_press(a_key);
+    engine.on_key_release(a_key);
+    engine.on_key_press(b_key);
+    engine.on_key_release(b_key);
+    engine.on_key_press(hold_key);
+    engine.on_key_release(hold_key);
+    engine.on_key_press(b_key);
+
+    assert_eq!(
+        *feedback.lock().unwrap(),
+        vec![(a_key, true), (b_key, true), (b_key, false)]
+    );
+}
+
+#[test]
 fn toggle_group_displacement_emits_stop_old_then_start_new() {
     let mut a = rule(
         "a",

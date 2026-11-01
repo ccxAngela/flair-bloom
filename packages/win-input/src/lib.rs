@@ -146,6 +146,19 @@ fn record_relay_injection(key: KeyId, is_up: bool) {
     record_injection_in(relay_map(), key, is_up, RELAY_TTL);
 }
 
+#[cfg(windows)]
+fn try_send_dd_key(key: KeyId, is_up: bool, send: impl FnOnce() -> bool) -> bool {
+    record_injection(key, is_up);
+    if send() {
+        record_relay_injection(key, is_up);
+        true
+    } else {
+        // 只有明确未提交给驱动时才撤销登记，让调用方安全回退。
+        try_consume_injection(key, is_up);
+        false
+    }
+}
+
 #[cfg(any(test, windows))]
 fn try_consume_from(
     map: &'static Mutex<PendingMap>,
@@ -835,13 +848,9 @@ fn dispatch(key: KeyId, is_up: bool) -> DispatchResult {
                     // VA 0x140003d13 显式清零），回到 LL hook 时 dwExtraInfo 恒为 0，SIM_MARKER
                     // 无法幸存。故一律先登记 PENDING_INJECTIONS，由时间窗口队列过滤自身注入回灌，
                     // 否则 hook 会把注入误判为物理按键。
-                    record_injection(key, is_up);
-                    if backend.send_key(vk, is_up) {
-                        record_relay_injection(key, is_up);
+                    if try_send_dd_key(key, is_up, || backend.send_key(vk, is_up)) {
                         return DispatchResult::Sent;
                     }
-                    // VK 无 scan code / 驱动拒绝 → 撤销登记，回退 SendInput，避免按键被直接丢弃。
-                    try_consume_injection(key, is_up);
                 }
             }
             if !backend_seen && !DD_FALLBACK_LOGGED.swap(true, std::sync::atomic::Ordering::SeqCst)
@@ -981,7 +990,6 @@ mod tests {
 
     #[test]
     fn pending_injection_is_consumed_once_and_keeps_direction() {
-        clear_pending_injections();
         let key = KeyId::Keyboard(0x51);
 
         record_injection(key, false);
@@ -991,9 +999,42 @@ mod tests {
         assert!(!try_consume_injection(key, false));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn dd_zero_return_keeps_delayed_hook_and_relay_events_filtered() {
+        let key = KeyId::Keyboard(0x87);
+        let submitted = try_send_dd_key(key, false, || dd_common::dd_key_was_submitted(0));
+        assert!(submitted, "不能重试已经可能产生按键的 DD 调用");
+        assert!(try_consume_injection(key, false));
+        assert!(try_consume_relay_injection(key, false));
+        assert!(!try_consume_injection(key, false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dd_hook_can_consume_injection_before_sdk_call_returns() {
+        let key = KeyId::Keyboard(0x85);
+        assert!(try_send_dd_key(key, true, || {
+            assert!(try_consume_injection(key, true));
+            dd_common::dd_key_was_submitted(0)
+        }));
+        assert!(!try_consume_injection(key, true));
+        assert!(try_consume_relay_injection(key, true));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dd_pre_submission_failure_allows_fallback_without_stale_filter() {
+        let key = KeyId::Keyboard(0x86);
+        let submitted = try_send_dd_key(key, false, || dd_common::dd_key_was_submitted(-1));
+        assert!(!submitted);
+        assert!(!try_consume_injection(key, false));
+        assert!(!try_consume_relay_injection(key, false));
+        assert!(!dd_common::dd_key_was_submitted(-2));
+    }
+
     #[test]
     fn relay_injection_is_consumed_once_and_keeps_direction() {
-        clear_relay_injections();
         let key = KeyId::Keyboard(0x45);
 
         record_relay_injection(key, false);

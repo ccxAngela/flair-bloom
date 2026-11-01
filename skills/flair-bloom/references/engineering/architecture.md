@@ -72,6 +72,8 @@ DD 同键启停仍依靠事件名额与时间窗口推测来源，不能可靠�
 
 X1/X2 在 DD 模式 / 鼠标设备缺失时按 once 旗标 warn 一次后自动回退 SendInput。`dd63330.dll` 纳入打包资源、运行时完整性校验（`packages/resource-integrity`）与发版前 `pnpm check:resources`。
 
+`DD_key` 的 `0` 返回值无法证明没有产生按键：保留回灌过滤与抬键账本，不重复补发 SendInput；只在未映射的按键或调用驱动前的负值错误哨兵时撤销登记并回退。首次日志记录返回值和系统错误码，`0` 仍作为投递结果不确定记录，不据此宣称驱动发送成功。
+
 **DD-HID 已永久移除**（驱动不稳定会导致蓝屏）：注入后端、`InputMode::DdHid`、安装链路与 `ddhid.63340.dll` 全部删除，`InputMode::from_str("dd_hid")` 返回 `None`，存量用户的 `input_mode` 配置在 `collect_configured_input_mode` 自动回落 SendInput。仅保留卸载与残留清理：`win_driver::dd_hid` 的检测与 `uninstall`、`uninstall_dd_hid_driver` 命令、`repair_dd_hid_residue`、诊断报告导出，以及随包分发的 `ddhid-driver/`（`ddc.exe -u` 要用）。
 
 **外设驱动连接**：后端只报事实——插拔监视线程（`bootstrap/input.rs` + `hidstick::StickTracker`，后台每 1.5 s 枚举一次，只对新出现的口握一次手）、外设模式下的链路断开（心跳或下发失败，`win_input::set_on_hidstick_offline`）与手动连上（`set_input_mode` 成功）汇到同一个连接态，翻转时发 `hid-stick-connected` / `hid-stick-disconnected`。自动握手只碰乐鑫 VID 的口（`pick_auto_candidates`）、不在启动主线程上做：用户没点外设模式时不能拖慢启动，也不能去拉别家设备的 DTR（Arduino Uno 一类会被复位）；手动选外设模式与诊断才按 `pick_candidates` 握全部非转串口芯片的口。外设模式正用着的口不再握手；链路断了而口还在时监视线程忘掉它、下一轮重握。断开的顺序固定为「win-input 回退 SendInput 并另起线程释放旧口 → 报断开」：口不释放，插回来常拿到同一个口名却打不开；监视线程先看到口消失时也经 `hidstick_link_down` 走同一条路径。刷新状态、提示、问要不要切过去都是面板的事：不在外设模式时收到「连上」弹确认（启动时本就插着的那一下可能早于面板开始监听，面板启动落定后自查一次），同意后走 `selectInputMode`。外设驱动拒收某个按下（六键已满等）时这一下改走 SendInput，它的松开也必须走 SendInput（`HIDSTICK_SENDINPUT_DOWN`），否则系统收不到抬起、键卡住。卸载 / 修复驱动时 `leave_driver_backend` 不动外设模式。防卡键两端都做：固件在 DTR 掉或按着键 1 s 无指令时松开全部，这边释放后端时发 `RESET`；心跳只在没按着键时发，否则会替卡死的引擎续命、废掉固件那道保险。
@@ -89,7 +91,7 @@ X1/X2 在 DD 模式 / 鼠标设备缺失时按 once 旗标 warn 一次后自动�
 - 线程编排：`catch_unwind` 包裹引擎线程，panic 后记录日志并补发释放事件；并发连发用 `AtomicBool cancel + thread::park_timeout`，`Drop` 时先 signal 再 join 确保按键不卡住。规则热更新前停止连发线程并清空 toggle 状态。
 - 互斥组（`BurstRule.group`）：同组同一时间只有一条规则在跑。切换规则开启时停止同组其他切换规则；同组切换时只播报「新规则开始」。
 - 组内插队栈：组内长按规则按下时插队——同组正在跑的规则标 `paused`（仍留在活跃集合）并让调度器停下，长按入该组的 `hold_stacks` 栈开跑；松开时先停自己，再把组还给栈里仍按着的上一条长按，否则还给被暂停的切换规则。栈中间先松的只出栈，不影响栈顶。插队期间开启的同组切换规则以 `paused` 登记，只成为松手后的恢复目标——正在按住的长按不能被挤掉，否则手指按着却不连发。滚轮触发的长按每格只是一次点按、没有「按住」，不参与插队。全局暂停、换规则、切后端、退出时清空栈与暂停状态。启停命令在 runtime 锁内发给调度器：面板聚焦时键盘走 relay 命令线程、鼠标走钩子线程，锁外发送会让命令到达顺序与状态变更顺序相反，留下一条引擎以为已停的连发；发送只是无界通道入队，不阻塞钩子线程。
-- `get_active_ids` 返回运行 ∪ 暂停：前端靠它差分播报，暂停 / 恢复不改变集合，插队不会多响；`get_rule_states` 返回 `RuleStates { running, paused }` 供界面区分两种状态。
+- `get_active_ids` 返回运行 ∪ 暂停，`get_rule_states` 返回 `RuleStates { running, paused }` 供界面区分两种状态。切换连发语音独立使用 `set_on_toggle_changed` → 有序通道 → `toggle-feedback` 事件，hook 线程只入队，独立任务串行 emit；不依赖状态轮询，短暂启停也能收到通知。同组替换只通知新规则开始，长按插队暂停与恢复不重复通知。
 - 多规则隔离：模拟目标键不会触发其他规则的启动 / 停止逻辑。
 - 非 Windows 平台提供空实现（`cfg(windows)` 隔离）。
 
