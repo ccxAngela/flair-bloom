@@ -73,6 +73,7 @@ jobs:
           FLAIR_LICENSE_PUBKEYS: ${{ secrets.FLAIR_LICENSE_PUBKEYS }}
         with:
           projectPath: apps/main
+          assetNamePattern: '气质花_[version]_[arch][setup][ext]'
           tagName: ${{ github.ref_name }}
           releaseName: 气质花按键助手 FlairBloom ${{ github.ref_name }}
           releaseBody: ${{ steps.changelog.outputs.body }}
