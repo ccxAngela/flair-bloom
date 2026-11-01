@@ -1,6 +1,6 @@
 # 气质花 0.8.0 与官网 0.1.10 发布
 
-Status: active
+Status: archive
 
 ## 范围与授权
 
@@ -17,8 +17,8 @@ Status: active
 - [x] 推 main 并等待 CI、Coverage、Site 通过。
 - [x] 分别推 `v0.8.0` 和 `site-v0.1.10`，触发构建与部署。
 - [x] 核对草稿安装包、GitHub 摘要、updater 签名和清单。
-- [ ] 公开应用 Release，验收公开下载与官网部署。
-- [ ] 归档记录并推送。
+- [x] 公开应用 Release，验收公开下载与官网部署。
+- [x] 归档记录并推送。
 
 ## 工期
 
@@ -47,6 +47,10 @@ main 推送后通过：
 
 两个安装包均已下载至独立临时目录，SHA-256 与 GitHub 摘要一致；使用配置内的公开 updater 公钥验证安装包签名及可信注释，篡改摘要被拒绝；NSIS 与 MSI 内部版本均为 0.8.0。没有执行安装。MSI SHA-256 为 `308e55ef3a0e48032d4cdb947d80f0356b1b93786db6ff361f2e57d39601bc38`，EXE 为 `116db1d3095a6d2532a15827fd180158d9f32d270ec0dce79cd6b5e1d9857a0d`。
 
-公开发布结果待补充。日志与验签夹具只保存在系统临时目录 `flair-release-*`，不收录密钥、第三方助手源码、程序或真实配置。
+[0.8.0 Release](https://github.com/x-wink/flair-bloom/releases/tag/v0.8.0) 已公开并设为 Latest，包含 EXE、MSI、两份签名和 `latest.json`。EXE、MSI 公开下载均 HTTP 200，文件大小与已验签副本一致；GitHub 直连与 gh-proxy 更新端点均返回 0.8.0。官网 0.1.10 已上线。发布交付修复提交为 `6ccff82`，它仅修正流程、检查工具和说明，不改本轮二进制或已推送 tag；应用构建仍对应 `690f8c5`。
+
+GitHub 对特殊文件名的处理见[官方资产上传说明](https://docs.github.com/en/rest/releases/assets#upload-a-release-asset)。发布页中文显示名由 label 提供，实际下载文件名保持英文；桌面快捷方式仍为中文加版本号。
+
+日志与验签夹具只保存在系统临时目录 `flair-release-*`，不收录密钥、第三方助手源码、程序或真实配置。本轮没有留下开发服务或长驻测试进程。
 
 真机 DD 同键持续运行、Interception 首装重启／20 槽耗尽、双程序占用与外设拔插仍未实测；构建、验签和资源校验不等于游戏兼容性验证。正式安装包不在用户当前环境主动安装，也不向用户桌面注入测试按键。
