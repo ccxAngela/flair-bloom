@@ -670,9 +670,13 @@ pub fn import_qzh_profile(
     path: String,
 ) -> Result<Profile, String> {
     let src = Path::new(&path);
-    if !src.exists() {
-        return Err(format!("文件不存在：{path}"));
-    }
+    let profile = read_imported_qzh(src)?;
+    let stem = src.file_stem().unwrap_or_default().to_string_lossy();
+    let base = pick_import_base_name(&profile.meta.name, &stem);
+    save_imported_profile(&app, &state.0, profile, &base)
+}
+
+pub(crate) fn read_imported_qzh(src: &Path) -> Result<Profile, String> {
     let size = src
         .metadata()
         .map_err(|e| format!("读取文件信息失败：{e}"))?
@@ -680,17 +684,18 @@ pub fn import_qzh_profile(
     if size > QZH_IMPORT_MAX_BYTES {
         return Err(format!("文件过大（{size} 字节），超过 4 MB 上限"));
     }
-    let mut profile = read_profile_from_file(src)?;
+    read_profile_from_file(src)
+}
 
-    let stem = src
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let base = pick_import_base_name(&profile.meta.name, &stem);
-
-    let dir = profiles_dir(&app)?;
+pub(crate) fn save_imported_profile(
+    app: &AppHandle,
+    engine: &crate::engine::BurstEngine,
+    mut profile: Profile,
+    base: &str,
+) -> Result<Profile, String> {
+    let dir = profiles_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建配置目录: {e}"))?;
-    let (final_name, final_path) = pick_unique_name(&dir, &base);
+    let (final_name, final_path) = pick_unique_name(&dir, base);
 
     let now = now_secs();
     profile.meta.name = final_name;
@@ -702,9 +707,9 @@ pub fn import_qzh_profile(
     write_profile_file_to_path(&final_path, &profile)?;
     // 落盘后一律经 activate_profile_file 激活，别在这里自己 set_rules：
     // 分享来的 .qzh 完全绕过前端录入拦截，净化必须和启动、托盘切换走同一条路。
-    let profile = activate_profile_file(&app, &state.0, &final_path)?;
-    crate::tray::refresh_menu(&app);
-    info!("已导入 .qzh 配置「{}」", profile.meta.name);
+    let profile = activate_profile_file(app, engine, &final_path)?;
+    crate::tray::refresh_menu(app);
+    info!("已导入配置「{}」", profile.meta.name);
     Ok(profile)
 }
 
@@ -721,7 +726,7 @@ fn ensure_qzh_extension(mut path: PathBuf) -> PathBuf {
 
 /// 选择导入配置的基础名：优先取文件内 meta.name；为空或撞上受保护的默认名时
 /// 退回文件名（stem），再兜底「导入配置」。
-fn pick_import_base_name(meta_name: &str, stem: &str) -> String {
+pub(crate) fn pick_import_base_name(meta_name: &str, stem: &str) -> String {
     let name = meta_name.trim();
     if !name.is_empty() && name != DEFAULT_PROFILE_NAME {
         return name.to_string();

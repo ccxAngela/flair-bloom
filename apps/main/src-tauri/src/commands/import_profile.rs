@@ -1,4 +1,4 @@
-//! 外部配置导入命令。支持从第三方按键助手解析并导入配置。
+//! 配置扫描、预览与导入。.qzh 直通既有读取逻辑，其余格式由解析器转换。
 //!
 //! 扩展方式：在 [`PARSERS`] 中追加新的 [`ParserDef`] 条目即可支持新格式。
 
@@ -14,12 +14,13 @@ use qzh_profile::{
 };
 
 use super::engine::EngineState;
-use super::profile::{now_secs, pick_unique_name, profiles_dir, write_profile_file_to_path};
+use super::profile::{now_secs, profiles_dir, save_imported_profile};
 
 static IMPORT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 mod celestial;
 mod jijian;
+mod qzh;
 mod shortcuts;
 mod xiaoji;
 
@@ -30,7 +31,7 @@ fn make_id() -> String {
 
 // ─── 公共结果类型 ─────────────────────────────────────────────────────────────
 
-/// 扫描到的一份外部配置。
+/// 扫描到的一份配置。
 #[derive(Debug, Serialize)]
 pub struct FoundConfig {
     /// 文件绝对路径。
@@ -324,7 +325,7 @@ fn read_import(
     Ok((parser, data))
 }
 
-/// 在目录的一级子目录中扫描所有已知外部配置文件。
+/// 扫描目录及一级子目录中的已知配置文件。
 fn scan_dir(dir: &Path) -> Vec<FoundConfig> {
     let mut found = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -360,6 +361,18 @@ fn scan_dir(dir: &Path) -> Vec<FoundConfig> {
 }
 
 fn to_found_configs(path: &Path) -> Vec<FoundConfig> {
+    if qzh::matches(path) {
+        return qzh::preview(path)
+            .map(|preview| {
+                vec![FoundConfig {
+                    path: path.to_string_lossy().into_owned(),
+                    source_app: preview.source_app,
+                    display_name: preview.suggested_name,
+                    source_profile_index: None,
+                }]
+            })
+            .unwrap_or_default();
+    }
     let Ok((parser, data)) = read_import(path, None) else {
         return Vec::new();
     };
@@ -419,7 +432,7 @@ fn default_scan_dirs(app: &AppHandle) -> Vec<PathBuf> {
 
 // ─── Tauri 命令 ───────────────────────────────────────────────────────────────
 
-/// 扫描指定目录（为空则扫描桌面/下载等默认位置）中已知的外部配置文件。
+/// 扫描指定目录（为空则使用默认位置），排除已在管理目录中的配置。
 #[tauri::command]
 pub fn scan_import_configs(app: AppHandle, dirs: Vec<String>) -> Vec<FoundConfig> {
     let targets: Vec<PathBuf> = if dirs.is_empty() {
@@ -427,18 +440,25 @@ pub fn scan_import_configs(app: AppHandle, dirs: Vec<String>) -> Vec<FoundConfig
     } else {
         dirs.into_iter().map(PathBuf::from).collect()
     };
-    scan_targets(targets)
+    let managed_dir = profiles_dir(&app).ok();
+    scan_targets(targets, managed_dir.as_deref())
 }
 
-fn scan_targets(targets: Vec<PathBuf>) -> Vec<FoundConfig> {
+fn scan_targets(targets: Vec<PathBuf>, managed_dir: Option<&Path>) -> Vec<FoundConfig> {
     let mut result = Vec::new();
     let mut seen = HashSet::new();
+    let managed_dir = managed_dir.and_then(|dir| std::fs::canonicalize(dir).ok());
     for dir in targets {
         for item in scan_dir(&dir) {
-            let key = (
-                std::fs::canonicalize(&item.path).unwrap_or_else(|_| PathBuf::from(&item.path)),
-                item.source_profile_index,
-            );
+            let path =
+                std::fs::canonicalize(&item.path).unwrap_or_else(|_| PathBuf::from(&item.path));
+            if managed_dir
+                .as_ref()
+                .is_some_and(|dir| path.starts_with(dir))
+            {
+                continue;
+            }
+            let key = (path, item.source_profile_index);
             if seen.insert(key) {
                 result.push(item);
             }
@@ -460,6 +480,9 @@ pub fn preview_import(
     if !p.exists() {
         return Err(format!("文件不存在：{path}"));
     }
+    if qzh::matches(p) {
+        return qzh::preview(p);
+    }
     let (parser, data) = read_import(p, source_profile_index)?;
     let dir_name = p
         .parent()
@@ -470,7 +493,7 @@ pub fn preview_import(
     Ok((parser.parse_preview)(&data, &dir_name))
 }
 
-/// 将外部配置导入为一份新的 FlairBloom 配置文件，立即切换为活跃配置。
+/// 导入为新的配置文件，立即切换为活跃配置；.qzh 保留整套配置内容。
 #[tauri::command]
 pub fn import_external_config(
     app: AppHandle,
@@ -485,6 +508,15 @@ pub fn import_external_config(
     }
 
     let p = Path::new(&path);
+    let profile = if qzh::matches(p) {
+        qzh::read(p)?
+    } else {
+        convert_profile(p, source_profile_index)?
+    };
+    save_imported_profile(&app, &state.0, profile, trimmed)
+}
+
+fn convert_profile(p: &Path, source_profile_index: Option<usize>) -> Result<Profile, String> {
     let (parser, data) = read_import(p, source_profile_index)?;
 
     let rules = (parser.parse_rules)(&data);
@@ -508,15 +540,10 @@ pub fn import_external_config(
 
     let hotkeys = (parser.parse_hotkeys)(&data);
     let now = now_secs();
-    let dir = profiles_dir(&app)?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建配置目录：{e}"))?;
-
-    let (final_name, final_path) = pick_unique_name(&dir, trimmed);
-
     let mut profile = Profile {
         schema_version: CURRENT_SCHEMA_VERSION,
         meta: ProfileMeta {
-            name: final_name,
+            name: String::new(),
             created_at: now,
             updated_at: now,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -530,17 +557,12 @@ pub fn import_external_config(
     // 与加载旧配置（read_profile_from_file）行为一致。
     profile.clamp_intervals();
 
-    write_profile_file_to_path(&final_path, &profile)?;
-    // 第三方配置的按键映射（vk_to_key_id）可能产出本版本不接受的组合，
-    // 与导入 .qzh 一样统一经 activate_profile_file 净化后再装引擎。
-    let profile = crate::commands::profile::activate_profile_file(&app, &state.0, &final_path)?;
-    crate::tray::refresh_menu(&app);
-
     Ok(profile)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::profile::write_profile_file_to_path;
     use super::*;
     use serde_json::json;
 
@@ -553,7 +575,7 @@ mod tests {
             {"K:67:0":{"Targets":[{"VirtualKey":68,"Mode":"Toggle"}]}}
         ],"ProfileNames":["长按","挂机"]});
         std::fs::write(&path, format!("\u{feff}{data}")).unwrap();
-        let found = scan_targets(vec![dir.path().to_path_buf(); 2]);
+        let found = scan_targets(vec![dir.path().to_path_buf(); 2], None);
         assert_eq!(found.len(), 2);
         assert_eq!(found[1].source_profile_index, Some(1));
         let preview = preview_import(path.display().to_string(), Some(1)).unwrap();
@@ -596,5 +618,104 @@ mod tests {
             .contains("超过 4 MB"));
         std::fs::write(&path, r#"{"Version":20,"unrelated":true}"#).unwrap();
         assert!(to_found_configs(&path).is_empty());
+    }
+
+    fn native_profile() -> Profile {
+        Profile {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            meta: ProfileMeta {
+                name: "分享配置".into(),
+                created_at: 1,
+                updated_at: 2,
+                app_version: "0.7.1".into(),
+                signature: "测试署名".into(),
+            },
+            rules: vec![BurstRule {
+                id: "native-rule".into(),
+                enabled: false,
+                trigger_key: KeyId::Keyboard(65),
+                target_key: KeyId::Keyboard(66),
+                mode: BurstMode::Toggle,
+                stop_key: Some(KeyId::Keyboard(67)),
+                interval_ms: 50,
+                group: Some("互斥组".into()),
+            }],
+            hotkeys: Hotkeys {
+                global_toggle: Some(KeyId::Keyboard(120)),
+                global_stop: Some(KeyId::Keyboard(121)),
+                panel_toggle: Some(KeyId::Keyboard(122)),
+            },
+            advanced: Advanced {
+                log_level: "debug".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn native_adapter_preserves_complete_profile_and_does_not_change_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("分享.QZH");
+        let profile = native_profile();
+        write_profile_file_to_path(&path, &profile).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let preview = preview_import(path.display().to_string(), None).unwrap();
+        assert_eq!(preview.source_app, "气质花");
+        assert_eq!(preview.suggested_name, "分享配置");
+        assert_eq!(preview.rule_count, 1);
+        assert_eq!(preview.interval_ms, 50);
+        assert_eq!(preview.global_stop, profile.hotkeys.global_stop);
+        assert_eq!(
+            serde_json::to_value(qzh::read(&path).unwrap()).unwrap(),
+            serde_json::to_value(&profile).unwrap()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+
+        let mut empty = profile;
+        empty.rules.clear();
+        write_profile_file_to_path(&path, &empty).unwrap();
+        assert_eq!(
+            preview_import(path.display().to_string(), None)
+                .unwrap()
+                .rule_count,
+            0
+        );
+        assert!(qzh::read(&path).unwrap().rules.is_empty());
+    }
+
+    #[test]
+    fn scanner_discovers_native_files_outside_managed_directory_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let managed = dir.path().join("profiles");
+        let portable = dir.path().join("分享");
+        std::fs::create_dir(&managed).unwrap();
+        std::fs::create_dir(&portable).unwrap();
+        let profile = native_profile();
+        for path in [
+            dir.path().join("桌面.QZH"),
+            portable.join("下载.qzh"),
+            managed.join("已生效.qzh"),
+        ] {
+            write_profile_file_to_path(&path, &profile).unwrap();
+        }
+        std::fs::write(dir.path().join("损坏.qzh"), b"invalid").unwrap();
+        let found = scan_targets(
+            vec![dir.path().to_path_buf(), portable, managed.clone()],
+            Some(&managed),
+        );
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|f| f.source_app == "气质花"
+            && f.display_name == "分享配置"
+            && f.source_profile_index.is_none()));
+
+        let oversized = dir.path().join("过大.qzh");
+        std::fs::File::create(&oversized)
+            .unwrap()
+            .set_len(IMPORT_MAX_BYTES + 1)
+            .unwrap();
+        assert!(preview_import(oversized.display().to_string(), None)
+            .unwrap_err()
+            .contains("超过 4 MB"));
+        assert!(qzh::read(&oversized).is_err());
+        assert!(to_found_configs(&oversized).is_empty());
     }
 }

@@ -52,9 +52,9 @@
 
 ## 配置文件管理
 
-后端命令：`save_profile` / `load_profile` / `list_profiles` / `init_default_profile` / `get_active_profile_path` / `rename_profile` / `delete_profile` / `fork_active_profile`；外部导入 `commands/import_profile.rs` 支持丐帮高手、衍天高手、极简按键、小叽按键的扫描、预览、导入。默认配置受保护：修改默认配置自动 fork 成新配置。`.qzh` 欢迎自行研究解析与开发兼容转换工具，文件封装不构成禁止兼容研究的声明。
+后端命令：`save_profile` / `load_profile` / `list_profiles` / `init_default_profile` / `get_active_profile_path` / `rename_profile` / `delete_profile` / `fork_active_profile`；统一导入入口由 `commands/import_profile.rs` 提供扫描、预览与导入，支持 `.qzh`、丐帮高手、衍天高手、极简按键、小叽按键配置。`.qzh` 通过 `import_profile/qzh.rs` 直通既有解密、迁移和校验，保留完整配置（包括空规则配置），无需转换成第三方格式；所有格式复用 `save_imported_profile`，选择不冲突的名称并经 `activate_profile_file` 激活。默认配置受保护：修改默认配置自动 fork 成新配置。`.qzh` 欢迎自行研究解析与开发兼容转换工具，文件封装不构成禁止兼容研究的声明。
 
-解析器仅保留独立实现的必要格式识别和转换规则，测试使用合成样例；不收录第三方源码、程序、真实配置、协议或授权记录。衍天默认位置为 `%APPDATA%\TheCelestialDiviner\config.json`；极简和小叽使用便携程序目录中的 INI / JSON。扫描桌面、下载及默认数据目录，按已知工具名只读解析快捷方式以定位程序或工作目录，不执行或 Resolve 目标程序。多档位按文件路径 + `source_profile_index` 去重，预览和导入携带同一档位；直接指定文件时读取活动档位，旧衍天格式回退镜像，避免重复合并。
+解析器仅保留独立实现的必要格式识别和转换规则，测试使用合成样例；不收录第三方源码、程序、真实配置、协议或授权记录。衍天默认位置为 `%APPDATA%\TheCelestialDiviner\config.json`；极简和小叽使用便携程序目录中的 INI / JSON。扫描桌面、下载及默认数据目录和一级子目录，按已知工具名只读解析快捷方式以定位程序或工作目录，不执行或 Resolve 目标程序；同一扫描流程识别 `.qzh`（扩展名不区分大小写），以规范化路径排除本应用 `profiles` 目录内的已有配置。多档位按文件路径 + `source_profile_index` 去重，预览和导入携带同一档位；直接指定文件时读取活动档位，旧衍天格式回退镜像，避免重复合并。
 
 字典键 `K:VK:EXT` / `M:MouseInput` 对应触发键，单目标的 Hold / Toggle 转为规则，Rotate 转互斥组，保留方案和目标的启用状态。`GlobalSwitch` / `IndependentClose` 转全局启停键；双宏、多目标轮流执行、修饰键组合、小键盘扩展 Enter 等无法等价表达的动作跳过并在预览中说明。周期是原 `HoldMs + IntervalMs`，钳到本软件范围，独立按压时长无法复现。预览显示周期范围与转换警告，不将所有规则标作长按。文件大小在读取前检查 4 MB 上限，支持 UTF-8 BOM；导入仍经 `activate_profile_file`，不导入源应用的全局运行状态、驱动和界面设置。
 

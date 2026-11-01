@@ -1,7 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Button from '../components/Button';
-import type { KeyId } from '../components/KeyCapture';
+import { keyLabel, type KeyId } from '../components/KeyCapture';
 import './dialog-base.css';
 import './ImportDialog.css';
 
@@ -27,29 +28,11 @@ interface ImportPreview {
 
 interface Props {
   onClose: () => void;
+  onImportStart: () => void;
   onImported: (profileName: string) => void;
 }
 
-function keyLabel(key: KeyId | null): string {
-  if (!key) return '';
-  if (key.kind === 'keyboard') {
-    const vk = key.code as number;
-    if (vk >= 0x70 && vk <= 0x7b) return `F${vk - 0x6f}`;
-    if (vk >= 0x30 && vk <= 0x39) return String.fromCharCode(vk);
-    if (vk >= 0x41 && vk <= 0x5a) return String.fromCharCode(vk);
-    return `VK_0x${vk.toString(16).toUpperCase()}`;
-  }
-  const labels: Record<string, string> = {
-    left: '鼠标左键',
-    right: '鼠标右键',
-    middle: '鼠标中键',
-    x1: '鼠标侧键1',
-    x2: '鼠标侧键2',
-  };
-  return labels[key.code as string] ?? String(key.code);
-}
-
-export default function ImportDialog({ onClose, onImported }: Props) {
+export default function ImportDialog({ onClose, onImportStart, onImported }: Props) {
   const [scanning, setScanning] = useState(false);
   const [found, setFound] = useState<FoundConfig[]>([]);
   const [scanDone, setScanDone] = useState(false);
@@ -115,7 +98,7 @@ export default function ImportDialog({ onClose, onImported }: Props) {
     const dir = customDir.trim();
     if (!dir) return;
     // 先尝试作为文件直接预览
-    if (/\.(json|ini)$/i.test(dir)) {
+    if (/\.(qzh|json|ini)$/i.test(dir)) {
       await loadPreview(dir);
       return;
     }
@@ -138,11 +121,26 @@ export default function ImportDialog({ onClose, onImported }: Props) {
     }
   }
 
+  async function handlePickFile() {
+    try {
+      const path = await open({
+        multiple: false,
+        filters: [{ name: '配置文件', extensions: ['qzh', 'json', 'ini'] }],
+      });
+      if (!path) return;
+      setCustomDir(path);
+      await loadPreview(path);
+    } catch (e) {
+      setPreviewError(String(e));
+    }
+  }
+
   async function handleImport() {
     if (!selectedPath || !preview || !profileName.trim()) return;
     setImporting(true);
     setImportError('');
     try {
+      onImportStart();
       const profile = await invoke<{ meta: { name: string } }>('import_external_config', {
         path: selectedPath,
         profileName: profileName.trim(),
@@ -159,7 +157,7 @@ export default function ImportDialog({ onClose, onImported }: Props) {
   const canImport =
     !!selectedPath &&
     !!preview &&
-    preview.rule_count > 0 &&
+    (preview.rule_count > 0 || /\.qzh$/i.test(selectedPath)) &&
     profileName.trim().length > 0 &&
     !importing &&
     !previewLoading;
@@ -167,15 +165,15 @@ export default function ImportDialog({ onClose, onImported }: Props) {
   return (
     <div className="modal-mask" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal import-modal">
-        <h2>导入外部配置</h2>
+        <h2>导入配置</h2>
         <p className="modal-desc">
-          支持丐帮高手、衍天高手、极简按键和小叽按键。多个方案可分别选择导入，转换差异会在预览中说明。
+          支持气质花 .qzh，以及丐帮高手、衍天高手、极简按键和小叽按键配置。选择后预览，确认才导入。
         </p>
 
         {/* 扫描结果列表 */}
         <div className="import-section">
           <div className="import-section-title">
-            <span>自动扫描结果</span>
+            <span>扫描结果</span>
             <button
               className="rescan-btn"
               onClick={() => {
@@ -190,9 +188,7 @@ export default function ImportDialog({ onClose, onImported }: Props) {
           </div>
           <div className="found-list">
             {found.length === 0 && scanDone && !scanning && (
-              <p className="found-empty">
-                未在桌面、下载及衍天高手默认配置目录找到已知格式的配置文件
-              </p>
+              <p className="found-empty">默认位置未找到配置，可选择文件或指定目录扫描</p>
             )}
             {found.length === 0 && scanning && <p className="found-empty scanning">正在扫描…</p>}
             {found.map((f) => (
@@ -213,7 +209,12 @@ export default function ImportDialog({ onClose, onImported }: Props) {
 
         {/* 手动输入目录/文件路径 */}
         <div className="import-section">
-          <div className="import-section-title">手动指定</div>
+          <div className="import-section-title">
+            <span>手动指定</span>
+            <Button size="sm" variant="outline" tone="neutral" onClick={handlePickFile}>
+              选择文件
+            </Button>
+          </div>
           <div className="custom-dir-row">
             <input
               ref={customInputRef}

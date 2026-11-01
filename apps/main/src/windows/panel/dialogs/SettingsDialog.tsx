@@ -121,7 +121,6 @@ interface Props {
   onThemeChange: (patch: Partial<ThemeSettings>) => void;
   onCreateProfile: () => void;
   onImportProfile: () => void;
-  onImportExternal: () => void;
   onSwitchProfile: (path: string) => void;
   onRenameProfile: (name: string) => void;
   onDeleteProfile: (name: string) => void;
@@ -924,14 +923,6 @@ export default function SettingsDialog(props: Props) {
                     onClick={props.onImportProfile}
                   >
                     导入配置
-                  </Button>
-                  <Button
-                    variant="outline"
-                    tone="neutral"
-                    size="sm"
-                    onClick={props.onImportExternal}
-                  >
-                    外部导入
                   </Button>
                 </div>
               </div>

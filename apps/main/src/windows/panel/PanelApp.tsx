@@ -798,8 +798,8 @@ export default function PanelApp() {
       const scan = await confirm({
         title: '要导入已有的按键配置吗？',
         description:
-          '支持丐帮高手、衍天高手、极简按键和小叽按键。可以先扫描，再自行选择配置、查看转换预览，确认后才导入。以后也能从「☰ → 导入其他助手配置」打开。',
-        confirmText: '扫描已有配置',
+          '支持气质花 .qzh，以及丐帮高手、衍天高手、极简按键和小叽按键配置。可以先扫描，再自行选择配置、查看预览，确认后才导入。以后也能从「☰ → 导入配置」打开。',
+        confirmText: '扫描配置',
         cancelText: '暂不导入',
       });
       if (scan) setShowImport(true);
@@ -2325,42 +2325,6 @@ export default function PanelApp() {
     }
   }
 
-  async function handleImportQzhProfile() {
-    const path = await openFileDialog({
-      multiple: false,
-      filters: [{ name: '配置文件', extensions: ['qzh'] }],
-    });
-    if (!path) return;
-    if (saveTimer.current) {
-      clearTimeout(saveTimer.current);
-      saveTimer.current = undefined;
-    }
-    initialLoadDone.current = false;
-    setInitialLoadSettled(false);
-    try {
-      // 后端完成解密 / 迁移 / 校验，复制进配置目录并立即激活
-      const profile = await invoke<Profile>('import_qzh_profile', { path });
-      setRules(profile.rules);
-      setHotkeys({
-        global_toggle: profile.hotkeys.global_toggle ?? null,
-        global_stop: profile.hotkeys.global_stop ?? null,
-        panel_toggle: profile.hotkeys.panel_toggle ?? null,
-      });
-      setProfileName(profile.meta.name);
-      profileNameRef.current = profile.meta.name;
-      setAdvancedOpen({});
-      await refreshProfileList();
-      toast.success(`已导入配置「${profile.meta.name}」`);
-    } catch (e) {
-      toast.error(`导入失败：${e}`);
-    } finally {
-      queueMicrotask(() => {
-        initialLoadDone.current = true;
-        setInitialLoadSettled(true);
-      });
-    }
-  }
-
   async function handleExportProfileByName(name: string) {
     const displayName = name === DEFAULT_PROFILE_NAME ? '默认配置' : name;
     const dest = await saveFileDialog({
@@ -3304,7 +3268,7 @@ export default function PanelApp() {
             },
           },
           {
-            label: '导入其他助手配置',
+            label: '导入配置',
             onClick: () => {
               setMenuOpen(false);
               setShowImport(true);
@@ -3419,10 +3383,6 @@ export default function PanelApp() {
             void handleCreateProfile();
           }}
           onImportProfile={() => {
-            setShowSettings(false);
-            void handleImportQzhProfile();
-          }}
-          onImportExternal={() => {
             setShowSettings(false);
             setShowImport(true);
           }}
@@ -3557,6 +3517,13 @@ export default function PanelApp() {
       <Overlay open={showImport} onClose={() => setShowImport(false)}>
         <ImportDialog
           onClose={() => setShowImport(false)}
+          onImportStart={() => {
+            // 避免旧配置的延迟保存覆盖刚导入的活跃配置。
+            if (saveTimer.current) {
+              clearTimeout(saveTimer.current);
+              saveTimer.current = undefined;
+            }
+          }}
           onImported={async (name) => {
             setShowImport(false);
             // 导入后以新配置名重新加载（后端已切换 activeProfilePath）
