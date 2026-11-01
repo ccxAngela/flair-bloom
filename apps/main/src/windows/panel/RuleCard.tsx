@@ -137,9 +137,6 @@ export default function RuleCard({
       draggable
       {...drag}
     >
-      <span className="drag-handle" aria-hidden>
-        ⠿
-      </span>
       <div className="rule-head">
         <button
           type="button"
@@ -151,6 +148,16 @@ export default function RuleCard({
         >
           {MODE_NAME[rule.mode]}
         </button>
+        <span className="drag-handle" aria-hidden>
+          <svg width="18" height="10" viewBox="0 0 18 10" fill="currentColor">
+            <circle cx="3" cy="2" r="1.2" />
+            <circle cx="9" cy="2" r="1.2" />
+            <circle cx="15" cy="2" r="1.2" />
+            <circle cx="3" cy="8" r="1.2" />
+            <circle cx="9" cy="8" r="1.2" />
+            <circle cx="15" cy="8" r="1.2" />
+          </svg>
+        </span>
         <button
           ref={menuRef}
           type="button"
@@ -160,7 +167,7 @@ export default function RuleCard({
           title="更多操作"
           onClick={() => setMenuOpen((v) => !v)}
         >
-          ⋯
+          <ChevronIcon size={12} />
         </button>
       </div>
       <div className="rule-body">

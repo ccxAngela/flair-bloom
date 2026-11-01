@@ -3136,7 +3136,7 @@ export default function PanelApp() {
               title="点击选择输入模式"
             >
               {INPUT_MODE_LABELS[inputMode]}
-              {elevated && inputMode === 'ddsimple' ? ' ★' : ''}
+              {inputMode === 'interception' ? ' ★' : ''}
             </Button>
           </div>
           <div className="footer-control">
@@ -3182,7 +3182,7 @@ export default function PanelApp() {
         items={(['interception', 'sendinput', 'ddsimple', 'hidstick'] as InputMode[])
           .filter((m) => m !== 'hidstick' || hidStickPresent)
           .map((m) => ({
-            label: INPUT_MODE_LABELS[m],
+            label: `${INPUT_MODE_LABELS[m]}${m === 'interception' ? ' ★' : ''}`,
             subtitle:
               m === 'sendinput'
                 ? '普通软件与网页 · 大部分游戏无效'
