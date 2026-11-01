@@ -16,9 +16,11 @@
 
 Windows NSIS 桌面快捷方式使用「气质花 v${VERSION}」，版本来自打包宏；产品名、EXE 名和注册表标识保持稳定。`installer.nsh` 在 PostInstall 整理静默／更新安装的已有链接，在 `.onGUIEnd` 整理完成页按用户选择创建的链接；只迁移目标为本安装目录的已知名称链接，保留其他安装目标及目标名称冲突。更新卸载保留链接，正常卸载通过 PostUninstall 清理。不要只在 PostInstall 中改名，交互安装此时尚未创建桌面链接。
 
+Windows 资源配置将 `icons/icon.ico` 安装到 `$INSTDIR\icons\icon.ico`，随应用资源一起卸载。整理快捷方式时通过 `IShellLink::SetIconLocation` 显式绑定该独立 ICO 的第 0 个图标，用 `IPersistFile` 保存以保留参数、工作目录和 Shell 属性；部分环境即使能提取 EXE 图标，Explorer 仍会把引用它的桌面链接显示为白纸。保存与改名后分别发出 `SHCNE_UPDATEITEM`、`SHCNE_RENAMEITEM` 的 Unicode 路径通知。成功保存过本安装的桌面链接后，每轮整理再发送一次 `SHCNE_ASSOCCHANGED` 并等待通知交付，使 Explorer 的图标缓存失效；仅通知单条路径可能仍显示白纸图标。已是当前中文名的链接同样修复图标；没有本安装的桌面链接时不刷新缓存。
+
 公开下载使用 `assetNamePattern: 'FlairBloom_[version]_[arch][setup][ext]'`，例如 `FlairBloom_0.8.0_x64-setup.exe` 与 `FlairBloom_0.8.0_x64.msi`，签名追加 `.sig`。GitHub 会过滤资产文件名中的中文，因此中文只放在独立的 `label`（发布页显示名称），实际下载地址保持 ASCII。tauri-action 用同一命名规则上传安装包、签名并生成 `latest.json`；`pnpm check:release vX.Y.Z` 随后校验产物、版本、平台下载地址与签名配对，并设置中文 label，缺少更新清单必须使工作流失败。`latest.json` 名称固定，应用身份不变。官网按文件后缀识别安装器，不绑定英文前缀。
 
-隔离回归：`scripts/test-installer-shortcuts.ps1 -MakeNsisPath <makensis.exe> -TauriUtilsPath <Tauri NSIS utils.nsh>`。夹具仅将桌面根目录替换为新建临时目录，实际编译并执行生产钩子，验证创建选择、完成页、升级去重、冲突保留与卸载清理，不运行正式安装器、不修改真实桌面。脚本使用 UTF-8 BOM 兼容 Windows PowerShell 5.1。
+隔离回归：`scripts/test-installer-shortcuts.ps1 -MakeNsisPath <makensis.exe> -TauriUtilsPath <Tauri NSIS utils.nsh>`。夹具仅将桌面根目录替换为新建临时目录，实际编译并执行生产钩子，验证创建选择、完成页、升级去重、图标路径及索引、快捷方式属性保留、冲突保留与卸载清理，不运行正式安装器、不修改真实桌面。脚本使用 UTF-8 BOM 兼容 Windows PowerShell 5.1。
 
 ## 步骤
 
