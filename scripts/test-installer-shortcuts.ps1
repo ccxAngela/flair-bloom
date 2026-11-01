@@ -23,7 +23,7 @@ $installRun = Start-Process -FilePath (Join-Path $fixtureRoot 'installer-fixture
 if ($installRun.ExitCode -ne 0) { throw "安装阶段回归失败：$($installRun.ExitCode)，夹具：$fixtureRoot" }
 
 $shortcutShell = New-Object -ComObject WScript.Shell
-$migrated = $shortcutShell.CreateShortcut((Join-Path $fixtureRoot 'desktop/气质花 v0.7.2.lnk'))
+$migrated = $shortcutShell.CreateShortcut((Join-Path $fixtureRoot 'desktop/气质花 v0.8.2.lnk'))
 $expectedIcon = Join-Path $fixtureRoot 'app/icons/icon.ico'
 if ($migrated.IconLocation -ne ($expectedIcon + ',0') -or -not (Test-Path -LiteralPath $expectedIcon -PathType Leaf)) {
     throw "快捷方式未指向安装目录中的独立图标，夹具：$fixtureRoot"
@@ -31,7 +31,7 @@ if ($migrated.IconLocation -ne ($expectedIcon + ',0') -or -not (Test-Path -Liter
 if ($migrated.Arguments -ne '--fixture' -or $migrated.Description -ne '保留快捷方式属性' -or $migrated.WindowStyle -ne 7 -or $migrated.WorkingDirectory -ne (Join-Path $fixtureRoot 'app')) {
     throw "图标修复丢失快捷方式属性，夹具：$fixtureRoot"
 }
-$conflicting = $shortcutShell.CreateShortcut((Join-Path $fixtureRoot 'desktop/气质花 v0.7.3.lnk'))
+$conflicting = $shortcutShell.CreateShortcut((Join-Path $fixtureRoot 'desktop/气质花 v0.8.3.lnk'))
 if ($conflicting.IconLocation -notmatch '\\shell32\.dll,7$') { throw "错误修改其他安装的快捷方式图标，夹具：$fixtureRoot" }
 
 $uninstallRun = Start-Process -FilePath (Join-Path $fixtureRoot 'app/uninstall-fixture.exe') -ArgumentList @('/S', "_?=$fixtureRoot\app") -WindowStyle Hidden -Wait -PassThru
