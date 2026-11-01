@@ -52,6 +52,10 @@
 
 ## 配置文件管理
 
+面板编辑通过 `profilePersistence.ts` 维护 500ms 防抖保存，快照绑定编辑时的配置名称与代际。切换、导入、新建、改名、删除和署名前先等待引擎规则／热键校验、默认配置另存及在途写入，再保存最后快照；失败保留待重试快照并阻止操作。导出和面板关闭按钮也先刷新保存。加载配置只更新界面，不触发回写。`save_profile` 仅持久化指定文件，不修改活跃路径或引擎；规则和热键由对应命令即时更新，激活仍统一经 `activate_profile_file`。
+
+托盘仅向隐藏面板发送 `profile-switch-requested`，复用同一保存屏障后调用 `load_profile`，不先行激活。默认配置另存失败时不提交规则／热键更新、不排入失败目标的保存快照，恢复编辑前状态后仍可重试或切换。
+
 后端命令：`save_profile` / `load_profile` / `list_profiles` / `init_default_profile` / `get_active_profile_path` / `rename_profile` / `delete_profile` / `fork_active_profile`；统一导入入口由 `commands/import_profile.rs` 提供扫描、预览与导入，支持 `.qzh`、丐帮高手、衍天高手、极简按键、小叽按键配置。`.qzh` 通过 `import_profile/qzh.rs` 直通既有解密、迁移和校验，保留完整配置（包括空规则配置），无需转换成第三方格式；所有格式复用 `save_imported_profile`，选择不冲突的名称并经 `activate_profile_file` 激活。默认配置受保护：修改默认配置自动 fork 成新配置。`.qzh` 欢迎自行研究解析与开发兼容转换工具，文件封装不构成禁止兼容研究的声明。
 
 解析器仅保留独立实现的必要格式识别和转换规则，测试使用合成样例；不收录第三方源码、程序、真实配置、协议或授权记录。衍天默认位置为 `%APPDATA%\TheCelestialDiviner\config.json`；极简和小叽使用便携程序目录中的 INI / JSON。扫描桌面、下载及默认数据目录和一级子目录，按已知工具名只读解析快捷方式以定位程序或工作目录，不执行或 Resolve 目标程序；同一扫描流程识别 `.qzh`（扩展名不区分大小写），以规范化路径排除本应用 `profiles` 目录内的已有配置。多档位按文件路径 + `source_profile_index` 去重，预览和导入携带同一档位；直接指定文件时读取活动档位，旧衍天格式回退镜像，避免重复合并。

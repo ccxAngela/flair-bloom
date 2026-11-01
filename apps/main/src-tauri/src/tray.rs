@@ -1,9 +1,7 @@
 use crate::commands::engine::EngineState;
-use crate::commands::profile::{
-    activate_profile_file, list_profiles_brief, ACTIVE_PATH_KEY, DEFAULT_PROFILE_NAME,
-};
+use crate::commands::profile::{list_profiles_brief, ACTIVE_PATH_KEY, DEFAULT_PROFILE_NAME};
 use crate::engine::BurstEngine;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{atomic::Ordering, Arc};
 use tauri::{
     menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -108,16 +106,11 @@ pub fn setup_tray(app: &AppHandle, engine: Arc<BurstEngine>) -> tauri::Result<()
         .on_menu_event(move |app, event| {
             let id = event.id.as_ref();
             if let Some(path) = id.strip_prefix(PROFILE_MENU_PREFIX) {
-                let path = PathBuf::from(path);
-                match activate_profile_file(app, &engine_clone, &path) {
-                    // 通知面板重新加载当前配置（面板复用 load_profile 流程刷新 UI）
-                    Ok(_) => {
-                        let _ =
-                            app.emit("active-profile-changed", path.to_string_lossy().to_string());
-                    }
-                    Err(e) => warn!("托盘切换配置失败：{e}"),
+                // 隐藏的面板仍持有待保存编辑，必须由同一屏障先落盘再激活。
+                if let Err(e) = app.emit_to(crate::PANEL_LABEL, "profile-switch-requested", path) {
+                    warn!("托盘请求切换配置失败：{e}");
                 }
-                // 无论成败都重建菜单：成功时更新勾选，失败时回滚 OS 自动打上的勾
+                // 先撤回系统自动打的勾，激活成功后 load_profile 再更新勾选。
                 refresh_menu(app);
                 return;
             }
@@ -125,8 +118,6 @@ pub fn setup_tray(app: &AppHandle, engine: Arc<BurstEngine>) -> tauri::Result<()
                 "toggle" => {
                     let enabled = !engine_clone.global_enabled.load(Ordering::SeqCst);
                     engine_clone.set_global_enabled(enabled, true);
-                    refresh_menu(app);
-                    let _ = app.emit("global-enabled-changed", enabled);
                 }
                 "open" => {
                     crate::enter_panel_mode(app);

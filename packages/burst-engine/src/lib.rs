@@ -257,7 +257,7 @@ impl BurstEngine {
         self.switching_backend.store(false, Ordering::SeqCst);
     }
 
-    /// 注册全局开关热键触发时的回调（供 app 层同步托盘与前端事件）。
+    /// 全部入口共用，状态锁内按顺序通知；回调只能快速入队，不能阻塞或回调引擎。
     pub fn set_on_global_changed(&self, f: impl Fn(bool) + Send + Sync + 'static) {
         *revive(self.on_global_changed.lock()) = Some(Box::new(f));
     }
@@ -339,7 +339,7 @@ impl BurstEngine {
             && stop_cache == encode_key_id(key)
             && self.global_enabled.load(Ordering::SeqCst)
         {
-            self.set_global_enabled_and_notify(false);
+            self.set_global_enabled(false, false);
             return KeyProcessResult {
                 accepted_physical: is_new_physical,
                 handled: true,
@@ -416,6 +416,7 @@ impl BurstEngine {
             }
             self.global_enabled.store(true, Ordering::SeqCst);
             runtime.lifecycle = EngineLifecycle::Running;
+            self.notify_global_changed(true);
         } else {
             // 与 enable 分支对称：在 runtime 锁内落定 global_enabled=false，使开关状态与后续的
             // lifecycle 判定串行化（lifecycle 最终由 stop_runtime_activity 末尾按 global_enabled
@@ -424,6 +425,7 @@ impl BurstEngine {
             {
                 let _runtime = revive(self.runtime.lock());
                 self.global_enabled.store(false, Ordering::SeqCst);
+                self.notify_global_changed(false);
             }
             self.stop_runtime_activity(wait);
         }
@@ -460,9 +462,8 @@ impl BurstEngine {
         revive(self.runtime.lock()).lifecycle
     }
 
-    /// 切换全局开关并通知 app 层（同步托盘与前端）。热键改变开关状态的统一出口。
-    fn set_global_enabled_and_notify(&self, enabled: bool) {
-        self.set_global_enabled(enabled, false);
+    // 与规则通知在同一把 runtime 锁内入队，避免跨线程开关与启停通知次序颠倒。
+    fn notify_global_changed(&self, enabled: bool) {
         if let Some(cb) = revive(self.on_global_changed.lock()).as_ref() {
             cb(enabled);
         }
@@ -483,11 +484,11 @@ impl BurstEngine {
             return true;
         }
         if start == Some(key) && !enabled {
-            self.set_global_enabled_and_notify(true);
+            self.set_global_enabled(true, false);
             return true;
         }
         if stop == Some(key) && enabled {
-            self.set_global_enabled_and_notify(false);
+            self.set_global_enabled(false, false);
             return true;
         }
         false

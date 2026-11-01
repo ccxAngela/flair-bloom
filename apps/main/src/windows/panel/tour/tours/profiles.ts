@@ -23,7 +23,10 @@ export const profiles: TourDef = {
       id: 'switch',
       target: 'profile',
       title: '切换和新建',
-      body: p('点开它就能切换已有配置、新建一套，或者进去管理。'),
+      body: p(
+        '点开它就能切换已有配置、新建一套，或者进去管理。',
+        '切换、导入和管理前会先保存当前编辑；保存失败会提示并中止本次操作，可继续编辑后重试。',
+      ),
     },
     {
       id: 'manage',

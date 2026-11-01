@@ -145,6 +145,44 @@ fn disabling_global_switch_issues_stop_all_with_bumped_generation() {
 }
 
 #[test]
+fn direct_global_changes_and_toggle_feedback_share_state_transition_order() {
+    let key = KeyId::Keyboard(0x46);
+    let (engine, _) = setup(vec![rule("f", BurstMode::Toggle, key, key)]);
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let global_events = events.clone();
+    engine.set_on_global_changed(move |enabled| {
+        global_events
+            .lock()
+            .unwrap()
+            .push(format!("global:{enabled}"));
+    });
+    let toggle_events = events.clone();
+    engine.set_on_toggle_changed(move |_, started| {
+        toggle_events
+            .lock()
+            .unwrap()
+            .push(format!("toggle:{started}"));
+    });
+
+    engine.set_global_enabled(false, false);
+    engine.set_global_enabled(true, false);
+    engine.on_key_press(key);
+    engine.on_key_release(key);
+    engine.set_global_enabled(false, false);
+    engine.on_key_press(key);
+    engine.shutdown();
+    engine.set_global_enabled(true, false);
+
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec!["global:false", "global:true", "toggle:true", "global:false"]
+    );
+    assert!(!engine
+        .global_enabled
+        .load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
 fn shutdown_stops_same_key_toggle_and_prevents_restart() {
     let key = KeyId::Keyboard(0x51);
     let (engine, rec) = setup(vec![rule("t", BurstMode::Toggle, key, key)]);

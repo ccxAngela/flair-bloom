@@ -10,7 +10,7 @@ use qzh_profile::{
 use serde::Serialize;
 use std::sync::{atomic::Ordering, Arc};
 #[allow(unused_imports)]
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use win_input::try_consume_relay_injection;
 
 pub struct EngineState(pub Arc<BurstEngine>);
@@ -21,13 +21,10 @@ pub struct RelayKeyResult {
     pub handled: bool,
 }
 
-/// 面板、浮窗切换与启动后自动开全局共用。广播给两个窗口：浮窗启动即挂载、只在挂载时读一次，
-/// 不广播它会一直停在旧值；面板靠这条事件得知浮窗那边的切换，才会照常播报。
+/// 面板、浮窗与自动开启共用，引擎统一排队通知两个窗口，避免旁路广播造成乱序。
 #[tauri::command]
-pub fn set_global_enabled(app: AppHandle, state: State<EngineState>, enabled: bool) {
+pub fn set_global_enabled(state: State<EngineState>, enabled: bool) {
     state.0.set_global_enabled(enabled, true);
-    crate::tray::refresh_menu(&app);
-    let _ = app.emit("global-enabled-changed", enabled);
 }
 
 /// 运行时更新全局热键（不写盘，写盘由 `save_profile` 负责）。

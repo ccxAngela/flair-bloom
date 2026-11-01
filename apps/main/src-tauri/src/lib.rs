@@ -240,36 +240,36 @@ pub fn run() {
             bootstrap::webview_scale::setup(app.handle());
             app.manage(LicenseState::load(app.handle()));
 
-            // 全局热键回调：同步托盘菜单与前端开关状态
-            // 注意：这两个回调均由 WH_KEYBOARD_LL hook 线程同步调用。
-            // 在 hook 返回前，WebView2（若聚焦）无法向主线程 STA 投递 COM 消息，
-            // 直接在 hook 线程执行 emit/tray 操作会造成死锁并导致 hook 超时被移除。
-            // 解决方案：将 UI 操作派发到 Tauri 异步运行时，hook 立即返回。
+            // hook 只入队，全局开关与规则通知在同一通道串行派发，避免语音乱序。
+            // emit/tray 不能在 hook 线程执行，否则 WebView STA 可能死锁。
             {
-                let handle = app.handle().clone();
-                burst_engine.set_on_global_changed(move |enabled| {
-                    let handle = handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        crate::tray::refresh_menu(&handle);
-                        let _ = handle.emit("global-enabled-changed", enabled);
-                    });
-                });
-            }
-
-            // 按用户操作顺序传递切换规则启停，避免短于前端轮询周期时整段漏报。
-            // hook 线程只入队，emit 在独立任务中串行执行，避免 WebView STA 死锁及事件乱序。
-            {
+                enum Feedback {
+                    Global(bool),
+                    Toggle(qzh_profile::KeyId, bool),
+                }
                 let (tx, rx) = std::sync::mpsc::channel();
+                let global_tx = tx.clone();
+                burst_engine.set_on_global_changed(move |enabled| {
+                    let _ = global_tx.send(Feedback::Global(enabled));
+                });
                 burst_engine.set_on_toggle_changed(move |key, started| {
-                    let _ = tx.send((key, started));
+                    let _ = tx.send(Feedback::Toggle(key, started));
                 });
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn_blocking(move || {
-                    while let Ok((key, started)) = rx.recv() {
-                        let _ = handle.emit(
-                            "toggle-feedback",
-                            serde_json::json!({ "key": key, "started": started }),
-                        );
+                    while let Ok(feedback) = rx.recv() {
+                        match feedback {
+                            Feedback::Global(enabled) => {
+                                crate::tray::refresh_menu(&handle);
+                                let _ = handle.emit("global-enabled-changed", enabled);
+                            }
+                            Feedback::Toggle(key, started) => {
+                                let _ = handle.emit(
+                                    "toggle-feedback",
+                                    serde_json::json!({ "key": key, "started": started }),
+                                );
+                            }
+                        }
                     }
                 });
             }

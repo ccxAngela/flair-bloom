@@ -28,11 +28,14 @@ interface ImportPreview {
 
 interface Props {
   onClose: () => void;
-  onImportStart: () => void;
-  onImported: (profileName: string) => void;
+  onImport: (request: {
+    path: string;
+    profileName: string;
+    sourceProfileIndex: number | null;
+  }) => Promise<void>;
 }
 
-export default function ImportDialog({ onClose, onImportStart, onImported }: Props) {
+export default function ImportDialog({ onClose, onImport }: Props) {
   const [scanning, setScanning] = useState(false);
   const [found, setFound] = useState<FoundConfig[]>([]);
   const [scanDone, setScanDone] = useState(false);
@@ -140,13 +143,11 @@ export default function ImportDialog({ onClose, onImportStart, onImported }: Pro
     setImporting(true);
     setImportError('');
     try {
-      onImportStart();
-      const profile = await invoke<{ meta: { name: string } }>('import_external_config', {
+      await onImport({
         path: selectedPath,
         profileName: profileName.trim(),
         sourceProfileIndex: selectedSourceProfile,
       });
-      onImported(profile.meta.name);
     } catch (e) {
       setImportError(String(e));
     } finally {

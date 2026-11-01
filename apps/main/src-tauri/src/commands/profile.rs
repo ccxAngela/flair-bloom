@@ -144,12 +144,7 @@ fn carry_over_meta(meta: &mut ProfileMeta, old: Option<ProfileMeta>, now: u64) {
 }
 
 #[tauri::command]
-pub fn save_profile(
-    app: AppHandle,
-    state: State<EngineState>,
-    name: String,
-    mut profile: Profile,
-) -> Result<String, String> {
+pub fn save_profile(app: AppHandle, name: String, mut profile: Profile) -> Result<String, String> {
     profile.validate().map_err(|e| e.to_string())?;
 
     let now = now_secs();
@@ -163,18 +158,9 @@ pub fn save_profile(
     profile.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
     profile.schema_version = CURRENT_SCHEMA_VERSION;
 
-    let rules = profile.rules.clone();
-    let hotkeys = profile.hotkeys.clone();
     let path = write_profile_file_to_path(&file_path, &profile)?;
 
-    // 更新 store 中记录的活跃配置路径
-    if let Ok(store) = app.store(crate::STORE_PATH) {
-        store.set(ACTIVE_PATH_KEY, serde_json::json!(path));
-        let _ = store.save();
-    }
-
-    state.0.set_rules(rules);
-    state.0.set_hotkeys(hotkeys);
+    // 自动保存只负责指定配置的持久化，不能重新激活旧快照或打断正在运行的规则。
     Ok(path)
 }
 
@@ -229,7 +215,7 @@ pub fn take_profile_notice(state: State<ProfileNotice>) -> Option<qzh_profile::S
 }
 
 /// 激活一份已在 profiles 目录中的配置文件：读取（解密 / 迁移 / 钳位 / 校验）→ 净化 →
-/// 装载引擎 → 更新 `activeProfilePath`。[`load_profile`] 命令与托盘切换共用此入口。
+/// 装载引擎 → 更新 `activeProfilePath`。托盘请求交给面板保存后再调用 [`load_profile`]。
 pub(crate) fn activate_profile_file(
     app: &AppHandle,
     engine: &crate::engine::BurstEngine,

@@ -260,14 +260,13 @@ export default function FloatApp() {
     invoke('show_main_panel').catch(() => {});
   };
 
-  // 全局开关：复用主面板逻辑（set_global_enabled），乐观更新本地状态。
+  // 开关状态跟随统一通知，命令返回时再写本地值会越过事件队列。
   const toggleGlobal = async () => {
     if (togglingGlobal) return;
     const next = !globalEnabled;
     setTogglingGlobal(true);
     try {
       await invoke('set_global_enabled', { enabled: next });
-      setGlobalEnabled(next);
     } catch {
       /* 切换失败保持原状 */
     } finally {

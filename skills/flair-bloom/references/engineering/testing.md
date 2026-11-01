@@ -21,6 +21,8 @@
 
 ## L1 已落地：调度器模拟 harness
 
+配置持久化与语音事件的异步边界由 `scripts/profile-persistence.test.ts`、`scripts/toggle-feedback.test.ts` 确定性覆盖：热键校验／默认另存／磁盘写入未完成时切换、旧代际回调、保存失败重试、重复切换，以及全局停止后的迟到播报。使用可控 Promise，不依赖真实文件或驱动。
+
 代码：`packages/burst-engine/src/scheduler/sim_tests.rs`。
 
 原理：连发时序逻辑全在 `SchedulerWorker::process_due(now)` 里，且它**把当前时刻作为入参**。喂合成的 `now`（虚拟时钟，逐毫秒推进）+ 一个只记录事件的 `RecordingDispatcher`（替代真实注入），即可对注入事件序列做 golden 断言——零 OS、完全确定性。
