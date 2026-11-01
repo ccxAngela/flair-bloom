@@ -3,6 +3,8 @@
 //! 统一入口：[`key_down`] / [`key_up`]（跨平台 stub）与 [`dispatch`]（Windows only）。
 //! 非 Windows 平台提供空实现，不影响编译。
 
+pub mod interception_health;
+
 #[cfg(windows)]
 mod dd_common;
 #[cfg(windows)]

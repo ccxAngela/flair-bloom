@@ -54,14 +54,26 @@ impl AppStatus {
     pub fn collect(app: &AppHandle) -> Self {
         let (resources_ok, missing_resources) = collect_resource_health(app);
         let interception = collect_interception_health();
+        let input_mode = collect_input_mode();
+        let configured_input_mode = collect_configured_input_mode(app);
+        if interception.issue.is_some()
+            && (input_mode == "interception" || configured_input_mode == "interception")
+        {
+            tracing::warn!(
+                current_mode = %input_mode,
+                configured_mode = %configured_input_mode,
+                detail = %interception.detail,
+                "游戏模式就绪检测未通过"
+            );
+        }
         Self {
             elevated: collect_elevated(),
             interception_installed: interception.status,
             interception_issue: interception.issue,
             dd_hid_installed: collect_dd_hid_installed(),
             hid_stick_present: collect_hid_stick_present(),
-            input_mode: collect_input_mode(),
-            configured_input_mode: collect_configured_input_mode(app),
+            input_mode,
+            configured_input_mode,
             scheduler_hp_degraded: app
                 .state::<crate::commands::engine::EngineState>()
                 .0
@@ -117,6 +129,8 @@ pub(crate) struct InterceptionHealth {
     pub status: DriverStatus,
     pub issue: Option<String>,
     #[cfg_attr(not(windows), allow(dead_code))]
+    pub warning: Option<String>,
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub detail: String,
 }
 
@@ -137,6 +151,7 @@ pub(crate) fn collect_interception_health() -> InterceptionHealth {
         InterceptionHealth {
             status: DriverStatus::NotInstalled,
             issue: None,
+            warning: None,
             detail: String::new(),
         }
     }
@@ -148,55 +163,18 @@ fn assess_interception_health(
     slots: Option<&[(i32, String)]>,
     classes: Result<(Vec<u32>, Vec<u32>), String>,
 ) -> InterceptionHealth {
-    let Some(slots) = slots else {
-        let message = if services {
-            "游戏模式驱动已注册，但运行通道无法打开。首次安装后必须点击 Windows「重启」；如已重启，请退出其他使用 Interception 的程序后重试。"
-        } else {
-            "游戏模式驱动未安装，或通道被其他程序占用。请先检查驱动安装状态。"
-        };
-        return InterceptionHealth {
-            status: if services {
-                DriverStatus::PendingReboot
-            } else {
-                DriverStatus::NotInstalled
-            },
-            issue: Some(message.into()),
-            detail: message.into(),
-        };
-    };
-    let keyboard = slots.iter().filter(|(n, _)| (1..=10).contains(n)).count();
-    let mouse = slots.iter().filter(|(n, _)| (11..=20).contains(n)).count();
-    let mut detail = format!("驱动通道可打开；硬件 ID 可读：键盘 {keyboard}/10、鼠标 {mouse}/10");
-    let issue = match classes {
-        Err(error) => Some(format!(
-            "{error}，无法确认游戏模式设备槽是否可用，请在诊断修复中检查后重试。"
-        )),
-        Ok((keyboards, mice)) => {
-            let keyboard_max = keyboards.into_iter().max();
-            let mouse_max = mice.into_iter().max();
-            detail.push_str(&format!(
-                "；内核类设备最高编号：键盘 {keyboard_max:?}、鼠标 {mouse_max:?}"
-            ));
-            if keyboard >= 10
-                || mouse >= 10
-                || keyboard_max.is_some_and(|n| n >= 10)
-                || mouse_max.is_some_and(|n| n >= 10)
-            {
-                Some("游戏模式设备槽已达到上限或出现超出范围的设备编号（键盘、鼠标各 10 个，不能互借）。拔插和退出应用不能回收槽位，必须点击 Windows「开始 → 电源 → 重启」；关机再开机可能因快速启动而无效。重启前使用通用模式。".into())
-            } else if keyboard == 0 || mouse == 0 {
-                Some("游戏模式通道已打开，但未找到可读取硬件 ID 的键盘或鼠标设备。请重启 Windows 后重试；当前使用通用模式。".into())
-            } else {
-                None
-            }
-        }
-    };
-    if let Some(reason) = &issue {
-        detail.push_str(&format!("；{reason}"));
-    }
+    let readiness = win_input::interception_health::assess_readiness(services, slots, classes);
     InterceptionHealth {
-        status: DriverStatus::Installed,
-        issue,
-        detail,
+        status: if readiness.runtime_available {
+            DriverStatus::Installed
+        } else if services {
+            DriverStatus::PendingReboot
+        } else {
+            DriverStatus::NotInstalled
+        },
+        issue: readiness.issue,
+        warning: readiness.warning,
+        detail: readiness.detail,
     }
 }
 
@@ -238,7 +216,7 @@ fn collect_input_mode() -> String {
 }
 
 #[cfg(windows)]
-fn collect_configured_input_mode(app: &AppHandle) -> String {
+pub(crate) fn collect_configured_input_mode(app: &AppHandle) -> String {
     use tauri_plugin_store::StoreExt;
 
     app.store(crate::STORE_PATH)
@@ -316,24 +294,26 @@ mod tests {
     #[test]
     fn open_context_without_hardware_ids_is_not_ready() {
         let health = assess_interception_health(true, Some(&[]), Ok((vec![0], vec![0])));
-        assert!(health.issue.unwrap().contains("未找到"));
+        assert!(health.issue.unwrap().contains("未读取到可用键盘"));
     }
 
     #[test]
-    fn full_keyboard_or_mouse_capacity_requires_restart_independently() {
+    fn full_keyboard_or_mouse_capacity_is_a_warning() {
         for (keyboard, mouse) in [(10, 1), (1, 10), (10, 10)] {
             let slots = online_slots(keyboard, mouse);
             let health = assess_interception_health(true, Some(&slots), Ok((vec![0], vec![0])));
-            assert!(health.issue.unwrap().contains("必须点击 Windows"));
+            assert!(health.issue.is_none());
+            assert!(health.warning.is_some());
         }
     }
 
     #[test]
-    fn high_class_index_detects_exhaustion_despite_low_online_count() {
+    fn high_class_index_is_diagnostic_only() {
         let slots = online_slots(1, 1);
         for classes in [(vec![12], vec![0]), (vec![0], vec![10])] {
             let health = assess_interception_health(true, Some(&slots), Ok(classes));
-            assert!(health.issue.unwrap().contains("超出范围"));
+            assert!(health.issue.is_none());
+            assert!(health.warning.is_some());
         }
         assert!(
             assess_interception_health(true, Some(&slots), Ok((vec![9], vec![9])))
@@ -343,12 +323,12 @@ mod tests {
     }
 
     #[test]
-    fn failed_class_enumeration_does_not_claim_ready() {
+    fn failed_class_enumeration_does_not_override_runtime_devices() {
         let slots = online_slots(1, 1);
         assert!(
             assess_interception_health(true, Some(&slots), Err("拒绝访问".into()))
                 .issue
-                .is_some()
+                .is_none()
         );
     }
 

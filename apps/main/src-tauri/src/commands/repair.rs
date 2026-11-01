@@ -542,9 +542,10 @@ fn interception_binary_missing(service: &str) -> bool {
 }
 
 #[cfg(windows)]
-fn diagnose_interception(_app: &AppHandle) -> Vec<DiagnosticItem> {
+fn diagnose_interception(app: &AppHandle) -> Vec<DiagnosticItem> {
     let mut out = Vec::new();
     let health = crate::commands::status::collect_interception_health();
+    let warning = health.warning;
     let api_ok = win_input::interception::is_driver_installed();
     // 仅当服务键 ImagePath 指向 Interception 的 keyboard.sys / mouse.sys 才视为残留，
     // 避免把同名第三方服务误判
@@ -573,9 +574,26 @@ fn diagnose_interception(_app: &AppHandle) -> Vec<DiagnosticItem> {
         } else {
             ItemStatus::Missing
         },
-        detail: health.detail,
+        detail: format!(
+            "当前模式：{}；保存的模式：{}\n{}",
+            win_input::current_mode().as_str(),
+            crate::commands::status::collect_configured_input_mode(app),
+            health.detail
+        ),
         recommended_action: None,
     });
+
+    if let Some(detail) = warning {
+        out.push(DiagnosticItem {
+            id: "interception.capacity".into(),
+            category: "Interception 驱动".into(),
+            label: "设备与容量提示（不阻止启用）".into(),
+            severity: Severity::Warn,
+            status: ItemStatus::Unknown,
+            detail,
+            recommended_action: None,
+        });
+    }
 
     let mut detail = format!("keyboard: {} / mouse: {}", yes_no(kbd), yes_no(mouse),);
     if foreign_kbd || foreign_mouse {

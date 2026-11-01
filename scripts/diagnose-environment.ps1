@@ -446,6 +446,7 @@ try {
     $settingsPath = Join-Path $env:APPDATA 'fun.xwink.flairbloom\settings.json'
     if (Test-Path -LiteralPath $settingsPath) {
         $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $report.savedInputMode = $settings.input_mode
         # Deliberately omit profile names, keys, licenses and all other settings.
         $report.savedAppAppearance = [ordered]@{
             layout=$settings.layout; panelScale=$settings.panelScale; panelMaximized=$settings.panelMaximized
@@ -547,6 +548,25 @@ Add-CommandOutput "Display, text scaling, windows and WebView2 (JSON)" {
     $displayJson = Get-DisplayEnvironment | ConvertTo-Json -Depth 10
     if ($env:USERPROFILE) { $displayJson = $displayJson.Replace($env:USERPROFILE, '%USERPROFILE%') }
     $displayJson
+}
+
+Add-CommandOutput "Interception 类设备编号（只读，不能单独判定驱动失效）" {
+    foreach ($className in @('KeyboardClass', 'PointerClass')) {
+        $classKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(('HARDWARE\DEVICEMAP\' + $className))
+        try {
+            if ($classKey) {
+                $indices = @($classKey.GetValueNames() | ForEach-Object {
+                    if ($_ -match '(\d+)$') { [int]$Matches[1] }
+                })
+                "${className} 编号：[$($indices -join ', ')]"
+            } else {
+                "${className}：未找到类设备映射"
+            }
+        } finally {
+            if ($classKey) { $classKey.Dispose() }
+        }
+    }
+    '类设备编号和满槽只表示容量风险；实际可用性请在应用内诊断中查看可读槽号与驱动通道。'
 }
 
 Add-CommandOutput "OS and PowerShell" {
@@ -698,7 +718,7 @@ if (-not (Test-Path -LiteralPath $appLogDir)) {
         $files = @(Get-ChildItem -LiteralPath $appLogDir -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 5)
         foreach ($file in $files) {
             "-- $($file.FullName)"
-            Select-String -LiteralPath $file.FullName -Pattern "DD-HID", "ddhid", "ddc.exe", "driver", "驱动", "error", "failed", "失败", "WebView", "DPI", "缩放", "window", "ScaleFactor" -SimpleMatch -ErrorAction SilentlyContinue |
+            Select-String -LiteralPath $file.FullName -Pattern "DD-HID", "ddhid", "ddc.exe", "Interception", "就绪", "driver", "驱动", "error", "failed", "失败", "WebView", "DPI", "缩放", "window", "ScaleFactor" -SimpleMatch -ErrorAction SilentlyContinue |
                 Select-Object -Last 80 |
                 ForEach-Object { "{0}:{1}: {2}" -f $_.Path, $_.LineNumber, $_.Line }
         }

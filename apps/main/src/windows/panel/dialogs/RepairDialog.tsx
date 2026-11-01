@@ -469,6 +469,15 @@ function buildDisplayIssues(items: DiagnosticItem[]): DisplayIssue[] {
 }
 
 function toDisplayIssue(item: DiagnosticItem): DisplayIssue {
+  if (item.id === 'interception.capacity') {
+    return {
+      id: item.id,
+      title: '游戏模式设备提示（不阻止启用）',
+      detail: item.detail,
+      severity: item.severity,
+      action: null,
+    };
+  }
   if (item.id === 'ddsimple.channel') {
     return {
       id: item.id,

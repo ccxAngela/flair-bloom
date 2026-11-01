@@ -214,6 +214,7 @@ pub fn set_input_mode(
     app: AppHandle,
     state: State<EngineState>,
     mode: String,
+    persist: Option<bool>,
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -222,14 +223,6 @@ pub fn set_input_mode(
         let input_mode =
             InputMode::from_str(&mode).ok_or_else(|| format!("未知输入模式: {mode}"))?;
 
-        if input_mode == InputMode::Interception {
-            if let Some(issue) = crate::commands::status::collect_interception_health().issue {
-                switch_input_backend(&app, &state.0, InputMode::SendInput);
-                crate::commands::status::emit_status_changed(&app);
-                return Err(format!("{issue} 已回退到通用模式，游戏模式未启用。"));
-            }
-        }
-
         if input_mode.requires_admin() && !win_driver::elevation::is_process_elevated() {
             return Err(format!(
                 "{} 需要管理员权限，请先以管理员身份重启应用",
@@ -237,9 +230,23 @@ pub fn set_input_mode(
             ));
         }
 
+        if input_mode == InputMode::Interception {
+            let health = crate::commands::status::collect_interception_health();
+            if let Some(issue) = health.issue {
+                tracing::warn!("游戏模式启用被阻止：{}", health.detail);
+                switch_input_backend_runtime(&state.0, InputMode::SendInput);
+                crate::commands::status::emit_status_changed(&app);
+                return Err(format!("{issue} 已回退到通用模式，游戏模式未启用。"));
+            }
+        }
+
         check_rules_for_mode(&state.0.get_rules(), input_mode)?;
 
-        switch_input_backend(&app, &state.0, input_mode);
+        if persist.unwrap_or(true) {
+            switch_input_backend(&app, &state.0, input_mode);
+        } else {
+            switch_input_backend_runtime(&state.0, input_mode);
+        }
         if win_input::current_mode() == InputMode::HidStick {
             crate::bootstrap::input::on_hid_stick_backend_up(&app);
         }
@@ -255,7 +262,7 @@ pub fn set_input_mode(
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, state, mode);
+        let _ = (app, state, mode, persist);
         Err("仅 Windows 平台支持切换输入模式".to_string())
     }
 }
@@ -271,13 +278,19 @@ pub(crate) fn switch_input_backend(
     mode: win_input::InputMode,
 ) {
     use tauri_plugin_store::StoreExt;
-    engine.begin_backend_switch();
-    win_input::init_backend(mode);
-    engine.end_backend_switch();
+    switch_input_backend_runtime(engine, mode);
     if let Ok(store) = app.store(crate::STORE_PATH) {
         store.set("input_mode", serde_json::json!(mode.as_str()));
         let _ = store.save();
     }
+}
+
+#[cfg(windows)]
+fn switch_input_backend_runtime(engine: &BurstEngine, mode: win_input::InputMode) {
+    // 临时降级也必须先停止注入和抬键，但不能改写用户保存的模式。
+    engine.begin_backend_switch();
+    win_input::init_backend(mode);
+    engine.end_backend_switch();
 }
 
 /// 卸载 / 修复驱动前让出驱动通道：切回 SendInput。外设模式不经任何驱动，保持不动——否则用户为

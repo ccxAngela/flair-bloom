@@ -749,7 +749,7 @@ export default function PanelApp() {
 
     startupInputModeHandledRef.current = true;
 
-    if (configured === 'interception' && status.interception_issue) {
+    if (configured === 'interception' && status.elevated && status.interception_issue) {
       await showInterceptionIssue(status.interception_issue);
       return;
     }
@@ -1770,7 +1770,11 @@ export default function PanelApp() {
       if (target === 'interception') {
         const status = await invoke<AppStatus>('get_app_status');
         applyAppStatus(status);
-        if (status.interception_installed !== 'not_installed' && status.interception_issue) {
+        if (
+          status.elevated &&
+          status.interception_installed !== 'not_installed' &&
+          status.interception_issue
+        ) {
           await showInterceptionIssue(status.interception_issue);
           return;
         }
@@ -1824,14 +1828,16 @@ export default function PanelApp() {
   }
 
   async function showInterceptionIssue(issue: string) {
-    await invoke('set_input_mode', { mode: 'sendinput' });
+    setModePickerOpen(false);
+    await invoke('set_input_mode', { mode: 'sendinput', persist: false });
     await refreshAppStatus();
-    await confirm({
+    const inspect = await confirm({
       title: '游戏模式尚未就绪',
-      description: `${issue} 当前使用通用模式，游戏模式未启用。`,
-      confirmText: '知道了',
-      cancelText: null,
+      description: `${issue} 本次临时使用通用模式，已保留原先选择的输入模式。诊断修复中可查看检测依据并导出报告。`,
+      confirmText: '打开诊断',
+      cancelText: '知道了',
     });
+    if (inspect) setShowRepair(true);
   }
 
   function pushRules(updater: (prev: BurstRule[]) => BurstRule[]) {
