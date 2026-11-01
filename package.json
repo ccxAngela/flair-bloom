@@ -5,6 +5,7 @@
     "dev": "pnpm --filter main tauri dev",
     "build": "pnpm --filter main tauri build",
     "check:resources": "tsx scripts/check-ddhid-resources.ts",
+    "check:release": "tsx scripts/verify-release-assets.ts",
     "lint": "oxlint apps/main/src",
     "lint:fix": "oxlint --fix apps/main/src",
     "format": "oxfmt apps/main/src",

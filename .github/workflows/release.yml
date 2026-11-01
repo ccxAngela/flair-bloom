@@ -73,10 +73,15 @@ jobs:
           FLAIR_LICENSE_PUBKEYS: ${{ secrets.FLAIR_LICENSE_PUBKEYS }}
         with:
           projectPath: apps/main
-          assetNamePattern: '气质花_[version]_[arch][setup][ext]'
+          assetNamePattern: 'FlairBloom_[version]_[arch][setup][ext]'
           tagName: ${{ github.ref_name }}
           releaseName: 气质花按键助手 FlairBloom ${{ github.ref_name }}
           releaseBody: ${{ steps.changelog.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: --target x86_64-pc-windows-msvc
+
+      - name: Check release assets and updater metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm check:release "${{ github.ref_name }}"
