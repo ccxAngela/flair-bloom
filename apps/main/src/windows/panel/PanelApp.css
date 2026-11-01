@@ -404,9 +404,11 @@ body {
   background: var(--fb-border);
 }
 
-/* 正在跑：外圈呼吸光晕，不改色条——状态与模式两件事分开表达 */
-.rule-row.active {
-  border-color: var(--fb-rule-active-border);
+/* 高对比描边持续可见，淡底和外圈脉冲区分运行态；左侧色条仍只表示模式。 */
+.rule-row.active:not(.is-paused):not(.disabled) {
+  background:
+    linear-gradient(var(--fb-rule-active-bg), var(--fb-rule-active-bg)), var(--fb-surface);
+  border-color: var(--fb-color-primary-text);
   animation: rule-glow 1.2s ease-in-out infinite;
 }
 
@@ -439,16 +441,20 @@ body {
 @keyframes rule-glow {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(var(--fb-color-primary-rgb), 0.35);
+    box-shadow:
+      0 0 0 1px rgba(var(--fb-color-primary-rgb), 0.3),
+      0 0 8px rgba(var(--fb-color-primary-rgb), 0.16);
   }
 
   50% {
-    box-shadow: 0 0 0 4px rgba(var(--fb-color-primary-rgb), 0.12);
+    box-shadow:
+      0 0 0 4px rgba(var(--fb-color-primary-rgb), 0.3),
+      0 0 20px rgba(var(--fb-color-primary-rgb), 0.46);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rule-row.active {
+  .rule-row.active:not(.is-paused):not(.disabled) {
     animation: none;
     box-shadow: 0 0 0 3px rgba(var(--fb-color-primary-rgb), 0.25);
   }

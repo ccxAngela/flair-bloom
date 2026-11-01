@@ -64,8 +64,8 @@ export const gettingStarted: TourDef = {
       target: 'global',
       title: '打开总开关',
       body: p(
-        '点右下角「全局已禁用」，让它变成「全局已启用」，背景变色就生效了。',
-        '按住刚才录的那个键就开始自动连发，松手停。',
+        '点右下角「全局已禁用」，让它变成「全局已启用」，面板出现明显描边和呼吸提示。',
+        '按住刚才录的那个键就开始自动连发，运行中的规则卡会脉冲高亮，松手停。',
       ),
       done: (now) => now.globalEnabled,
       actionHint: '等你点亮它…',

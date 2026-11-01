@@ -21,6 +21,7 @@ body {
 }
 
 .fb-float {
+  position: relative;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
@@ -142,20 +143,15 @@ body {
   opacity: 0.5;
 }
 
-/* 激活脉冲：只向外扩散、不回收（末帧已全透明，回到 0 不可见） */
-.fb-float .hkb-cap--key.is-active {
-  animation: fb-float-cap-pulse 0.45s ease-out infinite;
-}
-@keyframes fb-float-cap-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(var(--pulse), 0.5);
-  }
-  100% {
-    box-shadow: 0 0 0 5px rgba(var(--pulse), 0);
-  }
+/* 小键帽延用横版运行描边与脉冲，亮点缩小，避免遮住字符。 */
+.fb-float .hkb-cap--key.is-active:not(.is-paused)::before {
+  top: 2px;
+  left: 2px;
+  width: 3px;
+  height: 3px;
 }
 @media (prefers-reduced-motion: reduce) {
-  .fb-float .hkb-cap--key.is-active {
+  .fb-float .hkb-cap--key.is-active:not(.is-paused) {
     animation: none;
     box-shadow: 0 0 0 2px rgba(var(--pulse), 0.35);
   }

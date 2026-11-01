@@ -29,6 +29,7 @@ import {
 } from '../panel/windowScale';
 import '../panel/HorizontalLayout.css';
 import './FloatApp.css';
+import '../panel/active-feedback.css';
 
 const settingsStore = new LazyStore('settings.json');
 const THEME_KEY = 'theme';
@@ -308,6 +309,7 @@ export default function FloatApp() {
       className={`fb-float ${globalEnabled ? 'on' : 'off'}`}
       data-tauri-drag-region
     >
+      {globalEnabled && <div className="global-active-frame" aria-hidden="true" />}
       <img className="fb-float-logo" src={iconUrl} alt="" data-tauri-drag-region />
 
       <div className="fb-float-content" data-tauri-drag-region>

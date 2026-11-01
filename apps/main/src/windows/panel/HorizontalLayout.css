@@ -116,9 +116,35 @@
   color: var(--fb-color-primary-text);
 }
 
-/* 连发中：保持模式形状（实心 / 描边），只加外圈呼吸光晕——形状表模式、光晕表状态，两件事不串味 */
-.hkb-cap--key.is-active {
-  animation: hkb-pulse 0.9s ease-in-out infinite;
+/* 描边与角落亮点持续标识运行，外圈呼吸加强动效；实心 / 描边仍表示模式。 */
+.hkb-cap--key.is-active:not(.is-paused) {
+  outline: 2px solid var(--fb-color-primary-text);
+  outline-offset: 1px;
+  z-index: 2;
+  animation: hkb-pulse 1.1s ease-in-out infinite;
+}
+
+.hkb-cap--key.is-active:not(.is-paused)::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  pointer-events: none;
+  animation: hkb-running-dot 1.1s ease-in-out infinite;
+}
+
+@keyframes hkb-running-dot {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 /* 被同组长按插队暂停：同时带 .is-active，特异性相同，靠声明在其后覆盖掉呼吸。
@@ -143,16 +169,21 @@
 @keyframes hkb-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(var(--pulse), 0.5);
+    box-shadow: 0 0 0 1px rgba(var(--pulse), 0.25);
   }
   50% {
-    box-shadow: 0 0 0 4px rgba(var(--pulse), 0);
+    box-shadow:
+      0 0 0 5px rgba(var(--pulse), 0.3),
+      0 0 14px rgba(var(--pulse), 0.45);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .hkb-cap--key.is-active {
+  .hkb-cap--key.is-active:not(.is-paused) {
     animation: none;
     box-shadow: 0 0 0 3px rgba(var(--pulse), 0.35);
+  }
+  .hkb-cap--key.is-active:not(.is-paused)::before {
+    animation: none;
   }
   .hkb-cap--key.is-paused {
     box-shadow: none;

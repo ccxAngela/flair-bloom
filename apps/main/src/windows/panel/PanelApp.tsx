@@ -96,6 +96,7 @@ import UpdateNoticeDialog, {
 import { changelogSection } from './changelog';
 import { grantsSignature, type LicenseSummary, watermarkSignature } from './license';
 import './PanelApp.css';
+import './active-feedback.css';
 
 /** 后端 `take_profile_notice` 的返回形态，与 `qzh_profile::SanitizeReport` 同源。 */
 interface SanitizeReport {
@@ -2685,6 +2686,7 @@ export default function PanelApp() {
       data-signature={activeSignature}
       style={{ ['--panel-bg' as string]: `url(${bgUrl})` }}
     >
+      {globalEnabled && <div className="global-active-frame" aria-hidden="true" />}
       <header className="panel-header" onMouseDown={handleHeaderMouseDown}>
         <img className="header-icon" src={iconUrl} alt="" draggable={false} />
         <h1>
