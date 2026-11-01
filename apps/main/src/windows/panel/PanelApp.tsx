@@ -3466,6 +3466,7 @@ export default function PanelApp() {
             });
           }}
           onCopied={() => toast.success('已复制环境信息')}
+          onGroupCopied={() => toast.success('已复制群号，在 QQ 中搜索加群')}
           onCopyFailed={(e) => toast.error(`复制失败：${e}`)}
         />
       </Overlay>

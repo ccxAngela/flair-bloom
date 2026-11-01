@@ -3,6 +3,16 @@ import { useHashAnchor, useTheme } from '@xwink/ui';
 
 const { releases, latest, status } = useReleases();
 const { isDark, preference: themePreference, toggle: toggleTheme } = useTheme();
+const groupCopyStatus = ref('');
+
+async function copyGroupNumber() {
+  try {
+    await navigator.clipboard.writeText(PRODUCT_QQ_GROUP);
+    groupCopyStatus.value = '已复制群号，在 QQ 中搜索加群';
+  } catch {
+    groupCopyStatus.value = '复制失败，请手动复制上方群号';
+  }
+}
 
 const themeModes = [
   { value: 'light', label: '浅色', icon: 'ph:sun-dim' },
@@ -165,6 +175,12 @@ const glowCycle = `${((highlights.length + 1) * GLOW_STAGGER).toFixed(1)}s`;
               ><span v-else-if="!unavailable" class="invisible" aria-hidden="true">
                 · 0.0 MB · 发布于 0000-00-00 · GitHub 下载</span
               >
+            </p>
+            <p class="mt-3 text-sm text-(--ui-fg-muted)">
+              使用问题或建议？
+              <a href="#support" class="text-(--ui-primary) underline-offset-2 hover:underline">
+                加入产品QQ群
+              </a>
             </p>
             </XReveal>
           </div>
@@ -450,10 +466,24 @@ const glowCycle = `${((highlights.length + 1) * GLOW_STAGGER).toFixed(1)}s`;
           <p class="mt-2 text-sm text-(--ui-fg-muted)">期望功能、优化建议、问题报告，欢迎骚扰，邮箱 1041367524@qq.com</p>
           <div class="mt-8 grid gap-4 sm:grid-cols-3">
             <XReveal :delay="stagger(0)" class="ui-glow-card flex flex-col p-5">
-              <h3 class="font-semibold text-(--ui-fg-strong)">问题反馈</h3>
+              <h3 class="font-semibold text-(--ui-fg-strong)">交流反馈</h3>
               <p class="mt-2 text-sm text-(--ui-fg-muted)">
-                遇到问题或有想法，到 GitHub Issues 留言或发邮件；崩溃时应用会提示日志路径，附上日志更好定位。
-                应用里 ☰ 菜单 →「支持&帮助」直达这里，「关于」里有作者邮箱。
+                交流用法、分享配置、反馈问题，欢迎加入产品QQ群。
+              </p>
+              <p class="mt-3 text-sm text-(--ui-fg)">
+                QQ群：<strong class="select-text font-semibold tabular-nums">{{ PRODUCT_QQ_GROUP }}</strong>
+              </p>
+              <button
+                type="button"
+                class="mt-3 inline-flex cursor-pointer items-center gap-1.5 self-start rounded-(--ui-radius) border border-(--ui-primary)/30 px-3 py-2 text-sm text-(--ui-primary) hover:bg-(--ui-primary)/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--ui-primary)"
+                @click="copyGroupNumber"
+              >
+                <XIcon name="ph:copy" class="size-4" />
+                复制群号
+              </button>
+              <p role="status" class="mt-2 text-xs text-(--ui-fg-muted)">{{ groupCopyStatus }}</p>
+              <p class="mt-3 text-sm text-(--ui-fg-muted)">
+                反馈异常时可附上诊断报告或日志。应用里 ☰ →「关于」也能复制群号。
               </p>
               <a
                 :href="`${REPOSITORY}/issues`"
@@ -471,7 +501,7 @@ const glowCycle = `${((highlights.length + 1) * GLOW_STAGGER).toFixed(1)}s`;
                 剑三里没反应、连太快收不住、旧配置兼容这些问题，使用说明书里都有解答。
               </p>
               <a
-                :href="`${REPOSITORY}#常见问题`"
+                :href="`${REPOSITORY}#用起来需要知道的几件事`"
                 target="_blank"
                 rel="noopener"
                 class="mt-auto inline-flex items-center gap-1.5 self-start pt-4 text-sm text-(--ui-primary) hover:underline"

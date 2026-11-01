@@ -90,6 +90,13 @@ function label(item: ReleaseAsset): string {
           >功能介绍、上手步骤与更新公告</NuxtLink
         >
       </p>
+      <p class="mt-3 text-sm text-(--ui-fg-muted)">
+        使用问题或建议？
+        <NuxtLink
+          :to="{ path: '/', hash: '#support' }"
+          class="text-(--ui-primary) underline-offset-2 hover:underline"
+        >加入产品QQ群</NuxtLink>
+      </p>
     </div>
   </main>
 </template>

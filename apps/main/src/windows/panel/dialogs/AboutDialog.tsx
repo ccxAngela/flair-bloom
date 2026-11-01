@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { APP_NAME, AUTHOR_EMAIL } from '../../../constants';
+import { APP_NAME, AUTHOR_EMAIL, PRODUCT_QQ_GROUP } from '../../../constants';
 import Button from '../components/Button';
 import { collectLiveEnvironment, type LiveEnvironment } from '../environment';
 import DialogShell from './DialogShell';
@@ -35,6 +35,7 @@ interface Props {
   onWriteMail: () => void;
   onOpenDir: (kind: 'install' | 'data' | 'log' | 'drivers') => void;
   onCopied: () => void;
+  onGroupCopied: () => void;
   onCopyFailed: (err: unknown) => void;
 }
 
@@ -67,11 +68,21 @@ export default function AboutDialog({
   onWriteMail,
   onOpenDir,
   onCopied,
+  onGroupCopied,
   onCopyFailed,
 }: Props) {
   const [copying, setCopying] = useState(false);
   const [refreshing, setRefreshing] = useState(true);
   const [environment, setEnvironment] = useState<LiveEnvironment | null>(null);
+
+  async function handleCopyGroup() {
+    try {
+      await navigator.clipboard.writeText(PRODUCT_QQ_GROUP);
+      onGroupCopied();
+    } catch (e) {
+      onCopyFailed(e);
+    }
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -175,12 +186,21 @@ export default function AboutDialog({
     <DialogShell className="about-card" headerContent={headerNode} footer={footerNode}>
       <div className="about-body">
         <section className="about-section">
-          <p className="about-section-label">联系作者</p>
+          <p className="about-section-label">交流与联系</p>
           <ul className="about-list">
+            <li>
+              <span className="about-key">产品QQ群</span>
+              <span className="about-value about-value--with-action">
+                <span className="about-contact">{PRODUCT_QQ_GROUP}</span>
+                <Button size="sm" variant="outline" tone="primary" onClick={handleCopyGroup}>
+                  复制群号
+                </Button>
+              </span>
+            </li>
             <li>
               <span className="about-key">邮箱</span>
               <span className="about-value about-value--with-action">
-                <span className="about-email">{AUTHOR_EMAIL}</span>
+                <span className="about-contact">{AUTHOR_EMAIL}</span>
                 <Button size="sm" variant="outline" tone="primary" onClick={onWriteMail}>
                   写邮件
                 </Button>

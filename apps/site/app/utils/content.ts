@@ -1,6 +1,7 @@
 // 产品页与打印排版（海报、说明书）共用的文案；只在一处改，两边不会说成两套话
 
 export const REPOSITORY = 'https://github.com/x-wink/flair-bloom';
+export { PRODUCT_QQ_GROUP } from '../../../main/src/constants';
 
 // 作者个人站首页；app.xwink.fun 是产品索引页，页脚「更多产品」指那儿，两者不是一回事
 export const HOMEPAGE = 'https://xwink.fun';

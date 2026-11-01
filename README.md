@@ -8,6 +8,8 @@
 
 **下载与介绍：[官网](https://app.xwink.fun/flair-bloom/)** · **源码与反馈：[GitHub 仓库](https://github.com/x-wink/flair-bloom)**
 
+**交流反馈 QQ 群：1127449168**
+
 ## 打本时，它能帮你做什么
 
 - **武学助手 FFF**：设好 F 连发，省去一直戳键的动作。

@@ -126,8 +126,8 @@
   color: var(--fb-color-primary-text);
 }
 
-/* 邮箱可选中复制，不被 about-value 的省略截断 */
-.about-email {
+/* 联系方式允许手动选中，剪贴板不可用时也能复制。 */
+.about-contact {
   user-select: text;
   font-variant-numeric: tabular-nums;
 }
