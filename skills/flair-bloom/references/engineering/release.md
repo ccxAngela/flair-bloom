@@ -26,8 +26,8 @@ Windows NSIS 桌面快捷方式使用「气质花 v${VERSION}」，版本来自�
 2. **发版前更新文档**（强制）：逐一核对并使之与本版本实际行为一致——`README.md`（使用说明、界面示意图、「接下来」列表）、本 skill 的 `references/manual/*`（用户可见行为变了就改对应篇，并同步 `tour/tours/<id>.ts`）与 `references/engineering/*`（架构、约束、schema 版本、目录结构）、`THIRD_PARTY.md` / `EULA.md`（引入 / 变更第三方组件或权限说明时）。跑 `pnpm skills:check`。
 3. `pnpm bump-version X.X.X`：自动同步三处版本号并把 `[Unreleased]` 重命名为 `[X.X.X] - 日期`（`scripts/bump-version.ts`）。
 4. 提交：`chore(release): bump version to X.X.X`。
-5. **等用户明确授权**后：`git tag vX.X.X && git push origin main && git push origin vX.X.X`。
-6. tag 推送后 CI（`release.yml`：checkout → pnpm / Node 22 / Rust stable → `pnpm install` → `pnpm check:resources` → 解析上一稳定版本 tag → 提取 changelog → `tauri-action` 构建并创建 Draft Release）；审查后手动发布。当前只构建 Windows x64。
+5. 获得本次发版的明确授权后，先 `git push origin main`，等待该提交的 CI 和 Coverage 门禁通过；再 `git tag vX.X.X`、`git push origin vX.X.X`。不能把 main 与 tag 一起推送，以免发布先于门禁完成。
+6. tag 推送后 CI（`release.yml`：checkout → pnpm / Node 22 / Rust stable → `pnpm install` → `pnpm check:resources` → 解析上一稳定版本 tag → 提取 changelog → `tauri-action` 构建并创建 Draft Release）；核对安装包、签名、更新清单与公告后，在本次发版授权范围内发布。当前只构建 Windows x64。
 
 ## 护栏
 
