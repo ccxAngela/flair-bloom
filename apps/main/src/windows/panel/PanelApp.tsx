@@ -2689,7 +2689,9 @@ export default function PanelApp() {
         <img className="header-icon" src={iconUrl} alt="" draggable={false} />
         <h1>
           {APP_NAME}
-          {hotkeys.panel_toggle && <Kbd label="显隐">{keyLabel(hotkeys.panel_toggle)}</Kbd>}
+          {hotkeys.panel_toggle && (
+            <Kbd title="面板显隐快捷键">{keyLabel(hotkeys.panel_toggle)}</Kbd>
+          )}
         </h1>
         <div className="window-controls">
           <button

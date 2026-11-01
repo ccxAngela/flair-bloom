@@ -14,6 +14,10 @@
 
 改名时同步：前端 `apps/main/src/constants.ts` 的 `APP_NAME`（中文）/ `APP_NAME_EN`；Rust `apps/main/src-tauri/src/lib.rs` 的 `APP_NAME` / `APP_NAME_CN`；配置 `tauri.conf.json` 的 `productName` / `title`；`apps/main/src-tauri/Cargo.toml` 的 `name`（标识符，轻易不改）。
 
+Windows NSIS 桌面快捷方式使用「气质花 v${VERSION}」，版本来自打包宏；产品名、EXE 名和注册表标识保持稳定。`installer.nsh` 在 PostInstall 整理静默／更新安装的已有链接，在 `.onGUIEnd` 整理完成页按用户选择创建的链接；只迁移目标为本安装目录的已知名称链接，保留其他安装目标及目标名称冲突。更新卸载保留链接，正常卸载通过 PostUninstall 清理。不要只在 PostInstall 中改名，交互安装此时尚未创建桌面链接。
+
+隔离回归：`scripts/test-installer-shortcuts.ps1 -MakeNsisPath <makensis.exe> -TauriUtilsPath <Tauri NSIS utils.nsh>`。夹具仅将桌面根目录替换为新建临时目录，实际编译并执行生产钩子，验证创建选择、完成页、升级去重、冲突保留与卸载清理，不运行正式安装器、不修改真实桌面。脚本使用 UTF-8 BOM 兼容 Windows PowerShell 5.1。
+
 ## 步骤
 
 1. 在 `CHANGELOG.md` 的 `[Unreleased]` 填写本次内容。

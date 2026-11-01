@@ -13,6 +13,7 @@ export const settings: TourDef = {
       body: p(
         '全局开关、停止键、面板显隐——打着游戏不用切出来就能操作。',
         '点按键框开始捕获，按下要绑的键；框上右键可以清除。',
+        '标题栏会显示面板显隐快捷键，悬停可查看用途。',
       ),
       prepare: (host) => {
         host.closeMenus();
