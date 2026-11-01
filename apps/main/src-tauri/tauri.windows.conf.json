@@ -12,6 +12,9 @@
       "resources/ddhid-driver/ddhid63340.inf"
     ],
     "windows": {
+      "wix": {
+        "template": "./installer.wxs"
+      },
       "nsis": {
         "installerHooks": "./installer.nsh"
       }

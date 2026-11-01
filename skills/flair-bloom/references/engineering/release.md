@@ -22,6 +22,8 @@ Windows 资源配置将 `icons/icon.ico` 安装到 `$INSTDIR\icons\icon.ico`，�
 
 隔离回归：`scripts/test-installer-shortcuts.ps1 -MakeNsisPath <makensis.exe> -TauriUtilsPath <Tauri NSIS utils.nsh>`。夹具仅将桌面根目录替换为新建临时目录，实际编译并执行生产钩子，验证创建选择、完成页、升级去重、图标路径及索引、快捷方式属性保留、冲突保留与卸载清理，不运行正式安装器、不修改真实桌面。脚本使用 UTF-8 BOM 兼容 Windows PowerShell 5.1。
 
+MSI 使用 `installer.wxs` 模板，源自 Tauri CLI 2.11.2 的上游模板，仅为桌面快捷方式补上 `Icon="ProductIcon"`，使其与开始菜单一样引用 MSI 内嵌图标。模板保留上游产品标识、升级码与组件规则；更新 CLI 时对照上游同步模板，避免遗漏安装器修复。它不执行 NSIS 的中文版本命名钩子。
+
 ## 步骤
 
 1. 在 `CHANGELOG.md` 的 `[Unreleased]` 填写本次内容。

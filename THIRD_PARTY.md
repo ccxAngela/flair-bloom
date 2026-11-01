@@ -1,5 +1,10 @@
 ﻿# 第三方组件声明
 
+## Tauri MSI 安装模板
+
+- 来源：[Tauri CLI 2.11.2 的 main.wxs](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.2/crates/tauri-bundler/src/bundle/windows/msi/main.wxs)，MIT OR Apache-2.0。
+- 用途：Windows MSI 安装器；`apps/main/src-tauri/installer.wxs` 为桌面快捷方式显式指定内嵌图标，其他安装逻辑沿用上游模板。
+
 ## Windows / WebView2 Rust 接口绑定
 
 - 项目：[windows-rs](https://github.com/microsoft/windows-rs)（`windows` 0.61，MIT OR Apache-2.0）、[webview2-rs](https://github.com/wravery/webview2-rs)（`webview2-com` 0.38，MIT）。
