@@ -274,7 +274,12 @@ export default function FloatApp() {
     }
   };
 
-  const { active: activeSet, paused: pausedSet } = useRuleStates(active, 150);
+  const {
+    active: activeSet,
+    paused: pausedSet,
+    progress,
+    error: outputError,
+  } = useRuleStates(active, 150);
   // 含激活规则的互斥分组（保持规则出现顺序）
   const activeGroups: string[] = [];
   for (const r of rules) {
@@ -288,14 +293,22 @@ export default function FloatApp() {
     const isActive = activeSet.has(r.id);
     const isPaused = pausedSet.has(r.id);
     const modeName = r.mode === 'toggle' ? '切换连发' : '长按连发';
+    const position = progress[r.id];
+    const stepLabel =
+      position && position.step_count > 1
+        ? ` ${position.step_index + 1}/${position.step_count}`
+        : '';
     return (
       <span
         key={r.id}
         className={capClass(r, isActive, isPaused)}
         data-tauri-drag-region
-        title={`${keyLabel(r.trigger_key)} · ${modeName}${r.enabled ? '' : '（已停用）'}${isPaused ? ' · 已暂停' : ''}`}
+        title={`${keyLabel(r.trigger_key)} · ${modeName}${stepLabel}${r.enabled ? '' : '（已停用）'}${isPaused ? ' · 已暂停' : ''}`}
       >
-        <span className="hkb-cap-label">{keyLabel(r.trigger_key)}</span>
+        <span className="hkb-cap-label">
+          {keyLabel(r.trigger_key)}
+          {stepLabel}
+        </span>
       </span>
     );
   };
@@ -313,8 +326,8 @@ export default function FloatApp() {
 
       <div className="fb-float-content" data-tauri-drag-region>
         {!hasAny ? (
-          <span className="fb-float-empty" data-tauri-drag-region>
-            未连发
+          <span className="fb-float-empty" data-tauri-drag-region title={outputError}>
+            {outputError ? '输出异常，请重启' : '未连发'}
           </span>
         ) : (
           <>
@@ -341,7 +354,7 @@ export default function FloatApp() {
         className={`fb-float-global ${globalEnabled ? 'is-on' : 'is-off'}`}
         title={globalEnabled ? '暂停全局连发' : '启动全局连发'}
         aria-label={globalEnabled ? '暂停全局连发' : '启动全局连发'}
-        disabled={togglingGlobal}
+        disabled={togglingGlobal || !!outputError}
         onClick={() => void toggleGlobal()}
       >
         {globalEnabled ? (

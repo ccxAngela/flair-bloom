@@ -1,3 +1,6 @@
+#[cfg(test)]
+use crate::output_queue::hold_duration;
+use crate::output_queue::{OutputQueue, QueueAction};
 use qzh_profile::key_id::KeyId;
 use qzh_profile::profile::{BurstRule, MIN_EFFECTIVE_INTERVAL_MS};
 use std::collections::{hash_map::Entry, HashMap, HashSet};
@@ -10,29 +13,67 @@ use tracing::{error, warn};
 use win_input::{DispatchResult, InputEvent};
 
 const ACK_TIMEOUT: Duration = Duration::from_millis(500);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RulePhase {
-    DownPhase,
-    UpPhase,
-}
+const RELEASE_RETRY: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 struct ScheduledRule {
-    rule: Arc<BurstRule>,
+    source_id: Arc<str>,
+    queue: OutputQueue,
     generation: u64,
-    phase: RulePhase,
-    next_at: Instant,
-    is_down: bool,
-    /// 一次性点按：完成一个完整 down→up 周期后自动移除，不再排下一拍。
-    /// 供滚轮触发的 Hold 规则使用（滚轮每格只点按一次，没有「松开」来停止连发）。
     one_shot: bool,
+    run_id: u64,
+    throttle_at: Instant,
+    paused_throttle: Option<Duration>,
+}
+
+impl ScheduledRule {
+    fn deadline(&self) -> Option<Instant> {
+        self.queue.deadline().map(|deadline| {
+            if self.queue.held_key().is_some() {
+                deadline
+            } else {
+                deadline.max(self.throttle_at)
+            }
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleProgress {
+    pub rule_id: String,
+    pub step_index: usize,
+    pub step_count: usize,
+    pub completed_cycles: u64,
+    pub paused: bool,
+    pub error: Option<String>,
+    pub run_id: u64,
+    pub lateness_ms: u64,
+    pub max_lateness_ms: u64,
+}
+
+type ProgressMap = Arc<Mutex<HashMap<String, RuleProgress>>>;
+type Failure = Arc<Mutex<Option<String>>>;
+
+fn report_failure(failure: &Failure, progress: &ProgressMap, message: &str) {
+    let message = {
+        let mut failure = failure.lock().unwrap_or_else(|e| e.into_inner());
+        failure.get_or_insert_with(|| message.to_string()).clone()
+    };
+    for position in progress
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values_mut()
+    {
+        position.error = Some(message.clone());
+    }
 }
 
 enum SchedulerCommand {
     Start {
         rule: Arc<BurstRule>,
         generation: u64,
+        run_id: u64,
+        once: bool,
     },
     /// 一次性点按一条规则的目标键（滚轮 Hold）。与 [`SchedulerCommand::Start`] 不同：
     /// 不按 `rule.id` 去重，每次都用唯一内部 ID 排程，故同一规则的多格滚轮各点按一次。
@@ -45,13 +86,21 @@ enum SchedulerCommand {
         generation: u64,
         ack: Option<Sender<()>>,
     },
+    Pause {
+        rule_id: String,
+        generation: u64,
+    },
+    Resume {
+        rule_id: String,
+        generation: u64,
+    },
     StopAll {
         generation: u64,
-        ack: Option<Sender<()>>,
+        ack: Option<Sender<bool>>,
     },
     Shutdown {
         generation: u64,
-        ack: Sender<()>,
+        ack: Sender<bool>,
     },
 }
 
@@ -60,6 +109,9 @@ pub struct SchedulerHandle {
     join: Mutex<Option<JoinHandle<()>>>,
     hp_degraded: Arc<AtomicBool>,
     command_waker: platform_wait::CommandWaker,
+    progress: ProgressMap,
+    next_run: AtomicU64,
+    failure: Failure,
 }
 
 pub(crate) type PhysicalKeys = Arc<Mutex<HashSet<KeyId>>>;
@@ -173,6 +225,11 @@ impl SchedulerHandle {
         let worker_degraded = hp_degraded.clone();
         let command_waker = platform_wait::CommandWaker::new(&hp_degraded);
         let worker_waker = command_waker.clone();
+        let progress = ProgressMap::default();
+        let worker_progress = progress.clone();
+        let failure = Failure::default();
+        let worker_failure = failure.clone();
+        let failure_progress = progress.clone();
         // panic 兜底：worker 栈一旦展开，target_holds 随之丢失，靠 simulated_keys 账本
         // 释放所有已按下的模拟键，避免按键卡死（连发工具最差故障）。
         let panic_fallback = simulated_keys.clone();
@@ -185,9 +242,15 @@ impl SchedulerHandle {
                     dispatcher,
                     stats,
                     simulated_keys,
+                    worker_progress,
                 )
             }));
             if outcome.is_err() {
+                report_failure(
+                    &worker_failure,
+                    &failure_progress,
+                    "调度线程异常，输出已停止，请重启应用",
+                );
                 release_simulated_keys(&panic_fallback);
                 error!("调度器 worker 线程 panic，已按账本兜底释放模拟按键");
             }
@@ -197,11 +260,50 @@ impl SchedulerHandle {
             join: Mutex::new(Some(join)),
             hp_degraded,
             command_waker,
+            progress,
+            next_run: AtomicU64::new(1),
+            failure,
         }
     }
 
     pub fn start_rule(&self, rule: Arc<BurstRule>, generation: u64) {
-        self.send(SchedulerCommand::Start { rule, generation });
+        self.start_with_policy(rule, generation, false);
+    }
+
+    fn start_with_policy(&self, rule: Arc<BurstRule>, generation: u64, once: bool) {
+        let failure = self.failure();
+        let run_id = {
+            let mut progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(current) = progress.get(&rule.id).filter(|p| p.error.is_none()) {
+                current.run_id
+            } else {
+                let run_id = self.next_run.fetch_add(1, Ordering::Relaxed);
+                progress.insert(
+                    rule.id.clone(),
+                    RuleProgress {
+                        rule_id: rule.id.clone(),
+                        step_index: 0,
+                        step_count: rule.steps.len(),
+                        completed_cycles: 0,
+                        paused: false,
+                        error: failure.clone(),
+                        run_id,
+                        lateness_ms: 0,
+                        max_lateness_ms: 0,
+                    },
+                );
+                run_id
+            }
+        };
+        if failure.is_some() {
+            return;
+        }
+        self.send(SchedulerCommand::Start {
+            rule,
+            generation,
+            run_id,
+            once,
+        });
     }
 
     pub fn tap_once(&self, rule: Arc<BurstRule>, generation: u64) {
@@ -209,6 +311,11 @@ impl SchedulerHandle {
     }
 
     pub fn stop_rule(&self, rule_id: String, generation: u64) {
+        let mut progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
+        if progress.get(&rule_id).is_some_and(|p| p.error.is_none()) {
+            progress.remove(&rule_id);
+        }
+        drop(progress);
         self.send(SchedulerCommand::Stop {
             rule_id,
             generation,
@@ -217,6 +324,10 @@ impl SchedulerHandle {
     }
 
     pub fn stop_all_async(&self, generation: u64) {
+        self.progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.send(SchedulerCommand::StopAll {
             generation,
             ack: None,
@@ -224,6 +335,10 @@ impl SchedulerHandle {
     }
 
     pub fn stop_all_blocking(&self, generation: u64) -> bool {
+        self.progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         let (tx, rx) = mpsc::channel();
         if !self.send(SchedulerCommand::StopAll {
             generation,
@@ -231,7 +346,7 @@ impl SchedulerHandle {
         }) {
             return false;
         }
-        rx.recv_timeout(ACK_TIMEOUT).is_ok()
+        rx.recv_timeout(ACK_TIMEOUT).unwrap_or(false)
     }
 
     pub fn shutdown_blocking(&self, generation: u64) -> bool {
@@ -242,7 +357,7 @@ impl SchedulerHandle {
         }) {
             return false;
         }
-        let acked = rx.recv_timeout(ACK_TIMEOUT).is_ok();
+        let acked = rx.recv_timeout(ACK_TIMEOUT).unwrap_or(false);
         if let Some(join) = self.join.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = join.join();
         }
@@ -255,6 +370,11 @@ impl SchedulerHandle {
 
     fn send(&self, command: SchedulerCommand) -> bool {
         if self.tx.send(command).is_err() {
+            report_failure(
+                &self.failure,
+                &self.progress,
+                "调度线程已退出，输出已停止，请重启应用",
+            );
             return false;
         }
         self.command_waker.wake();
@@ -279,9 +399,47 @@ pub(crate) trait Scheduler: Send + Sync {
     fn stop_all_blocking(&self, generation: u64) -> bool;
     fn shutdown_blocking(&self, generation: u64) -> bool;
     fn hp_degraded(&self) -> bool;
+    fn pause_rule(&self, rule_id: String, generation: u64);
+    fn resume_rule(&self, rule_id: String, generation: u64);
+    fn play_once(&self, rule: Arc<BurstRule>, generation: u64);
+    fn failure(&self) -> Option<String> {
+        None
+    }
+    fn progress(&self) -> Vec<RuleProgress> {
+        Vec::new()
+    }
 }
 
 impl Scheduler for SchedulerHandle {
+    fn failure(&self) -> Option<String> {
+        self.failure
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+    fn resume_rule(&self, rule_id: String, generation: u64) {
+        self.send(SchedulerCommand::Resume {
+            rule_id,
+            generation,
+        });
+    }
+    fn play_once(&self, rule: Arc<BurstRule>, generation: u64) {
+        self.start_with_policy(rule, generation, true);
+    }
+    fn pause_rule(&self, rule_id: String, generation: u64) {
+        self.send(SchedulerCommand::Pause {
+            rule_id,
+            generation,
+        });
+    }
+    fn progress(&self) -> Vec<RuleProgress> {
+        self.progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect()
+    }
     fn start_rule(&self, rule: Arc<BurstRule>, generation: u64) {
         SchedulerHandle::start_rule(self, rule, generation);
     }
@@ -312,6 +470,7 @@ fn worker_loop(
     dispatcher: Arc<dyn EventDispatcher>,
     stats: Option<Arc<SchedulerStats>>,
     simulated_keys: SimulatedKeys,
+    progress: ProgressMap,
 ) {
     let mut worker = SchedulerWorker {
         rules: HashMap::new(),
@@ -322,6 +481,9 @@ fn worker_loop(
         simulated_keys,
         min_interval_ms: MIN_EFFECTIVE_INTERVAL_MS,
         tap_seq: 0,
+        progress,
+        clock: |_| Instant::now(),
+        cleanup_at: None,
     };
     let mut wait = platform_wait::WaitContext::new(command_waker, hp_degraded);
 
@@ -355,8 +517,7 @@ struct SchedulerWorker {
     /// 规则 ID 用 `Arc<str>` 而非 `String`：owner 登记到 `target_holds` 时只做引用计数
     /// 克隆，避免热路径（`process_due` 每拍 acquire/release）的 `String` 堆分配。
     rules: HashMap<Arc<str>, ScheduledRule>,
-    /// 目标键 -> 当前持有它的规则 ID 集合。集合非空即该键处于注入按下态，
-    /// 多条规则共享同一目标键时只发一次 down，最后一个 owner 释放时才发 up。
+    /// 已取得目标键的规则；残留账本也会阻止重新 down，避免释放失败后合并不同步骤。
     target_holds: HashMap<KeyId, HashSet<Arc<str>>>,
     current_generation: u64,
     dispatcher: Arc<dyn EventDispatcher>,
@@ -369,6 +530,9 @@ struct SchedulerWorker {
     min_interval_ms: u32,
     /// 一次性点按（`TapOnce`）的内部自增序号，用于生成唯一排程 ID，使同一规则的多次点按互不去重。
     tap_seq: u64,
+    progress: ProgressMap,
+    clock: fn(Instant) -> Instant,
+    cleanup_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,10 +544,17 @@ enum AcquireOutcome {
 impl SchedulerWorker {
     fn handle_command(&mut self, command: SchedulerCommand) -> bool {
         match command {
-            SchedulerCommand::Start { rule, generation } => {
+            SchedulerCommand::Start {
+                rule,
+                generation,
+                run_id,
+                once,
+            } => {
                 if generation == self.current_generation {
                     let id: Arc<str> = Arc::from(rule.id.as_str());
-                    self.insert_scheduled(id, rule, generation, false);
+                    if rule.validate().is_ok() {
+                        self.insert_scheduled(id, rule, generation, once, run_id);
+                    }
                 }
                 false
             }
@@ -392,7 +563,26 @@ impl SchedulerWorker {
                     // 唯一内部 ID：不与 rule.id 冲突，也使同一规则的多格滚轮各排一条、互不去重。
                     self.tap_seq = self.tap_seq.wrapping_add(1);
                     let id: Arc<str> = Arc::from(format!("\u{0}tap#{}", self.tap_seq).as_str());
-                    self.insert_scheduled(id, rule, generation, true);
+                    self.insert_scheduled(id, rule, generation, true, 0);
+                }
+                false
+            }
+            SchedulerCommand::Pause {
+                rule_id,
+                generation,
+            } => {
+                if generation == self.current_generation {
+                    self.pause_rule(&rule_id, Instant::now());
+                }
+                false
+            }
+            SchedulerCommand::Resume {
+                rule_id,
+                generation,
+            } => {
+                if generation == self.current_generation {
+                    // 失败或停止后实例已移除；恢复不能新建队列或清掉失败回报。
+                    self.resume_rule(&rule_id, Instant::now());
                 }
                 false
             }
@@ -410,26 +600,38 @@ impl SchedulerWorker {
                 false
             }
             SchedulerCommand::StopAll { generation, ack } => {
-                if generation >= self.current_generation {
+                let released = if generation >= self.current_generation {
                     self.current_generation = generation;
                     self.cleanup_all();
-                }
+                    self.simulated_keys
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_empty()
+                } else {
+                    // 旧停止不能以新运行的按键为失败依据，触发兜底会误松新按键。
+                    true
+                };
                 if let Some(ack) = ack {
-                    let _ = ack.send(());
+                    let _ = ack.send(released);
                 }
                 false
             }
             SchedulerCommand::Shutdown { generation, ack } => {
                 self.current_generation = self.current_generation.max(generation);
                 self.cleanup_all();
-                let _ = ack.send(());
+                let _ = ack.send(
+                    self.simulated_keys
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_empty(),
+                );
                 true
             }
         }
     }
 
-    /// 排入一条调度规则。`one_shot=true` 用于滚轮 Hold 的一次性点按（完成一个 down→up 周期后
-    /// 自移除）。以 `entry().or_insert` 去重：普通规则按 `rule.id` 幂等，一次性点按用唯一 ID
+    /// `one_shot=true` 在完整队列执行一次后自移除，供试播与一步滚轮 Hold 共用。
+    /// 以 `entry().or_insert` 去重：普通规则按 `rule.id` 幂等，一次性点按用唯一 ID
     /// 故每次都新增。
     fn insert_scheduled(
         &mut self,
@@ -437,14 +639,20 @@ impl SchedulerWorker {
         rule: Arc<BurstRule>,
         generation: u64,
         one_shot: bool,
+        run_id: u64,
     ) {
+        let now = (self.clock)(Instant::now());
+        let Ok(queue) = OutputQueue::new(rule.steps.clone(), now) else {
+            return;
+        };
         self.rules.entry(id).or_insert(ScheduledRule {
-            rule,
+            source_id: Arc::from(rule.id.as_str()),
+            queue,
             generation,
-            phase: RulePhase::DownPhase,
-            next_at: Instant::now(),
-            is_down: false,
             one_shot,
+            run_id,
+            throttle_at: now,
+            paused_throttle: None,
         });
     }
 
@@ -452,9 +660,11 @@ impl SchedulerWorker {
         let Some(rule) = self.rules.remove(rule_id) else {
             return;
         };
-        if rule.is_down {
-            let event = Self::release_owner(&mut self.target_holds, rule.rule.target_key, rule_id);
-            self.dispatch_events(event.into_iter().collect());
+        if let Some(key) = rule.queue.held_key() {
+            let event = Self::release_owner(&mut self.target_holds, key, rule_id);
+            if !self.dispatch_events(event.into_iter().collect()) {
+                self.dispatch_events(vec![InputEvent::up(key)]);
+            }
         }
     }
 
@@ -466,158 +676,233 @@ impl SchedulerWorker {
         // 释放 target_holds 后再按账本兜底对账，补发任何「曾注入 down、但其 up 注入失败」
         // 而残留按下态的目标键，杜绝卡键（按键工具最差故障）。
         self.reconcile_simulated_ledger();
+        self.refresh_cleanup_deadline((self.clock)(Instant::now()));
     }
 
     /// 兜底对账：把账本里仍记为「按下」的目标键补发一次 up。
-    /// 正常路径下 target_holds 释放后账本应已清零；唯一残留来源是之前某次 up 注入返回
-    /// `Failed`（安全桌面 / 前台抢焦等）导致 OS 端按键仍按下却未被递减——在此补发。
+    /// 释放失败或发送结果未知时仍可能保持按下；只有成功 up 才能清除记录。
     fn reconcile_simulated_ledger(&self) {
-        // drain（而非只读）账本：与超时兜底路径 release_simulated_keys（引擎线程）各自取走残留键，
-        // 同一把锁保证每个键只被一条路径补发一次 up，杜绝两线程对同键重复 up。
         let stuck: Vec<KeyId> = {
-            let mut simulated = self
+            let simulated = self
                 .simulated_keys
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if simulated.is_empty() {
                 return;
             }
-            simulated.drain().map(|(key, _)| key).collect()
+            simulated
+                .keys()
+                .filter(|key| !self.target_holds.contains_key(key))
+                .copied()
+                .collect()
         };
         let events: Vec<InputEvent> = stuck.into_iter().map(InputEvent::up).collect();
         self.dispatch_events(events);
     }
 
+    fn refresh_cleanup_deadline(&mut self, now: Instant) {
+        let has_orphan = self
+            .simulated_keys
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .any(|key| !self.target_holds.contains_key(key));
+        if has_orphan {
+            self.cleanup_at.get_or_insert(now + RELEASE_RETRY);
+        } else {
+            self.cleanup_at = None;
+        }
+    }
+
     fn next_deadline(&self) -> Option<Instant> {
-        self.rules.values().map(|r| r.next_at).min()
+        self.rules
+            .values()
+            .filter_map(ScheduledRule::deadline)
+            .chain(self.cleanup_at)
+            .min()
+    }
+
+    fn publish(&self, rule: &ScheduledRule, error: Option<String>) {
+        let mut progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(current) = progress
+            .get_mut(rule.source_id.as_ref())
+            .filter(|p| p.run_id == rule.run_id)
+        {
+            current.step_index = rule.queue.step_index();
+            current.step_count = rule.queue.step_count();
+            current.completed_cycles = rule.queue.completed_cycles();
+            current.paused = rule.queue.paused_remaining().is_some();
+            let (last, maximum) = rule.queue.lateness();
+            current.lateness_ms = last.as_millis().min(u128::from(u64::MAX)) as u64;
+            current.max_lateness_ms = maximum.as_millis().min(u128::from(u64::MAX)) as u64;
+            current.error = error;
+        }
+    }
+
+    fn pause_rule(&mut self, id: &str, now: Instant) {
+        let Some(mut rule) = self.rules.remove(id) else {
+            return;
+        };
+        if rule.queue.paused_remaining().is_none() {
+            if let Some(key) = rule.queue.held_key() {
+                let event = Self::release_owner(&mut self.target_holds, key, id);
+                if !self.dispatch_events(event.into_iter().collect()) {
+                    self.dispatch_events(vec![InputEvent::up(key)]);
+                    self.publish(
+                        &rule,
+                        Some(format!(
+                            "第 {} 步暂停释放失败，已停止",
+                            rule.queue.step_index() + 1
+                        )),
+                    );
+                    return;
+                }
+            }
+            rule.paused_throttle = Some(rule.throttle_at.saturating_duration_since(now));
+            rule.queue.pause(now);
+        }
+        self.publish(&rule, None);
+        self.rules.insert(Arc::from(id), rule);
+    }
+
+    fn resume_rule(&mut self, id: &str, now: Instant) {
+        if let Some(rule) = self.rules.get_mut(id) {
+            rule.queue.resume(now);
+            if let Some(remaining) = rule.paused_throttle.take() {
+                rule.throttle_at = now + remaining;
+            }
+        }
+        if let Some(rule) = self.rules.get(id) {
+            self.publish(rule, None);
+        }
     }
 
     fn process_due(&mut self, now: Instant) {
-        // 总并发限速：管线可持续的「总」注入速率有上限——单条规则没问题，多条同时连发会叠加
-        // 冲破天花板（实测 2 toggle + 1 hold 即收不住）。故有效下限按活跃规则数等分：每条规则
-        // 的下限 = 基础下限(min_interval_ms) × 活跃规则数，使总 tap 速率 ≈ 1000/基础下限、与规则
-        // 数无关；单规则时退化为基础下限。effective interval = max(请求 interval, floor)，只拉长
-        // 拍间间隔、不改 hold 点按手感，绝不快过规则请求，且 >=1ms 保证 next_at 单调推进。
-        //
-        // 暂不处理：floor 用「实时」active_count，已排程规则的 next_at 是按上一拍的 active_count
-        // 算好的、本拍不重算。故新规则切入的「那一拍」，既有规则会以旧（更小）间隔多发一拍才收敛到
-        // 新 floor——是单拍的瞬时轻微超发，下一拍即自愈，不构成持续「收不住」（限速针对的是稳态总
-        // 速率）。为此重排所有规则不值当，故意保留此瞬时窗口。
-        let current_generation = self.current_generation;
+        if self.cleanup_at.is_some_and(|deadline| deadline <= now) {
+            self.cleanup_at = None;
+            self.reconcile_simulated_ledger();
+        }
         let active_count = self
             .rules
             .values()
-            .filter(|r| r.generation == current_generation)
+            .filter(|r| r.generation == self.current_generation && r.queue.deadline().is_some())
             .count()
             .max(1) as u32;
-        let floor_ms = self.min_interval_ms.saturating_mul(active_count);
-        let stats = self.stats.as_deref();
-        // 与 rules.iter_mut() 拆分借用，原地处理到期规则，避免每 tick 的 id 克隆与 remove/insert。
-        let target_holds = &mut self.target_holds;
-
-        let mut any_due = false;
-        let mut events = Vec::new();
-        let mut expired: Vec<Arc<str>> = Vec::new();
-
-        for (id, rule) in self.rules.iter_mut() {
-            if rule.next_at > now {
+        let throttle =
+            Duration::from_millis(u64::from(self.min_interval_ms.saturating_mul(active_count)));
+        let mut due: Vec<_> = self
+            .rules
+            .iter()
+            .filter_map(|(id, rule)| {
+                let deadline = rule.deadline()?;
+                // 重试和节流不重置排队年龄，避免同键高负载时旧步骤一直被新一轮挤走。
+                (deadline <= now).then_some((
+                    id.clone(),
+                    rule.queue.deadline().unwrap_or(deadline),
+                    rule.queue.held_key().is_none(),
+                ))
+            })
+            .collect();
+        due.sort_by(|a, b| (a.2, a.1, &a.0).cmp(&(b.2, b.1, &b.0)));
+        for (id, _, _) in due {
+            let Some(mut rule) = self.rules.remove(&id) else {
+                continue;
+            };
+            if rule.generation != self.current_generation {
+                if let Some(key) = rule.queue.held_key() {
+                    let event = Self::release_owner(&mut self.target_holds, key, &id);
+                    self.dispatch_events(event.into_iter().collect());
+                }
                 continue;
             }
-            any_due = true;
-
-            // 过期 generation 规则只做惰性释放（快速启停 / 切代后常见）。
-            if rule.generation != current_generation {
-                if rule.is_down {
-                    if let Some(event) = Self::release_owner(target_holds, rule.rule.target_key, id)
-                    {
-                        events.push(event);
-                    }
-                }
-                expired.push(id.clone());
+            let tick = (self.clock)(now);
+            let Some(action) = rule.queue.peek(tick) else {
+                self.rules.insert(id, rule);
+                continue;
+            };
+            let key = action.key();
+            if !action.is_release() && self.target_holds.contains_key(&key) {
+                rule.throttle_at = tick + Duration::from_millis(1);
+                self.rules.insert(id, rule);
                 continue;
             }
-
-            // 调度迟到采样，供 stress 诊断（不再驱动任何降频）。
-            if let Some(stats) = stats {
-                stats.record_delay(now.saturating_duration_since(rule.next_at));
+            if !action.is_release()
+                && self
+                    .simulated_keys
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(&key)
+            {
+                // 所有者消失不代表 up 成功；先修复残留按下态，下一拍才允许新的完整点按。
+                if self.cleanup_at.is_none_or(|deadline| deadline <= tick) {
+                    self.dispatch_events(vec![InputEvent::up(key)]);
+                    self.cleanup_at = Some(tick + RELEASE_RETRY);
+                }
+                rule.throttle_at = tick + RELEASE_RETRY;
+                self.rules.insert(id, rule);
+                continue;
             }
-
-            // hold（按下时长）按规则请求的 interval 计算，硬下限不拉长按下、保持点按特性；
-            // 仅把拍与拍之间的「间隔」放慢。
-            let interval = Duration::from_millis(rule.rule.interval_ms.max(floor_ms) as u64);
-            let hold = hold_duration(rule.rule.interval_ms);
-            match rule.phase {
-                RulePhase::DownPhase if hold.is_zero() => {
-                    match Self::acquire_owner(target_holds, rule.rule.target_key, id) {
-                        AcquireOutcome::Acquired => {
-                            events.push(InputEvent::down(rule.rule.target_key));
-                            if let Some(event) =
-                                Self::release_owner(target_holds, rule.rule.target_key, id)
-                            {
-                                events.push(event);
-                            }
-                        }
-                        AcquireOutcome::Shared => {
-                            let _ = Self::release_owner(target_holds, rule.rule.target_key, id);
-                        }
-                    }
-                    rule.is_down = false;
-                    rule.phase = RulePhase::DownPhase;
-                    rule.next_at = now + interval;
-                }
-                RulePhase::DownPhase => {
-                    if let AcquireOutcome::Acquired =
-                        Self::acquire_owner(target_holds, rule.rule.target_key, id)
-                    {
-                        events.push(InputEvent::down(rule.rule.target_key));
-                    }
-                    rule.is_down = true;
-                    rule.phase = RulePhase::UpPhase;
-                    rule.next_at = now + hold;
-                }
-                RulePhase::UpPhase => {
-                    if let Some(event) = Self::release_owner(target_holds, rule.rule.target_key, id)
-                    {
-                        events.push(event);
-                    }
-                    rule.is_down = false;
-                    rule.phase = RulePhase::DownPhase;
-                    let rest = interval.saturating_sub(hold).max(Duration::from_millis(1));
-                    rule.next_at = now + rest;
+            if let Some(stats) = &self.stats {
+                if let Some(deadline) = rule.queue.deadline() {
+                    stats.record_delay(tick.saturating_duration_since(deadline));
                 }
             }
-
-            // 一次性点按（滚轮 Hold）：完成一个 down→up 周期、相位回到 DownPhase 后自移除，不再排
-            // 下一拍。down 半程（DownPhase→UpPhase）相位为 UpPhase，不在此移除。
-            if rule.one_shot && rule.phase == RulePhase::DownPhase {
-                expired.push(id.clone());
+            let events = match action {
+                QueueAction::Press(_) => {
+                    Self::acquire_owner(&mut self.target_holds, key, &id);
+                    vec![InputEvent::down(key)]
+                }
+                QueueAction::Tap(_) => {
+                    Self::acquire_owner(&mut self.target_holds, key, &id);
+                    let mut events = vec![InputEvent::down(key)];
+                    events.extend(Self::release_owner(&mut self.target_holds, key, &id));
+                    events
+                }
+                QueueAction::Release(_) => Self::release_owner(&mut self.target_holds, key, &id)
+                    .into_iter()
+                    .collect(),
+            };
+            let t0 = Instant::now();
+            let event_count = events.len();
+            let succeeded = self.dispatch_events(events);
+            let completed_at = (self.clock)(now);
+            if let Some(stats) = &self.stats {
+                if event_count > 0 {
+                    stats.record_dispatch_cost(t0.elapsed() / event_count as u32);
+                }
+            }
+            let acknowledged = succeeded && rule.queue.acknowledge(action, completed_at).is_ok();
+            if !acknowledged {
+                let release = Self::release_owner(&mut self.target_holds, key, &id);
+                self.dispatch_events(release.into_iter().collect());
+                if self
+                    .simulated_keys
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(&key)
+                {
+                    self.dispatch_events(vec![InputEvent::up(key)]);
+                }
+                self.publish(
+                    &rule,
+                    Some(format!(
+                        "第 {} 步输入发送失败，已停止",
+                        rule.queue.step_index() + 1
+                    )),
+                );
+                continue;
+            }
+            if !action.is_release() {
+                rule.throttle_at = completed_at + throttle;
+            }
+            self.publish(&rule, None);
+            if !(rule.one_shot && rule.queue.completed_cycles() > 0) {
+                self.rules.insert(id, rule);
             }
         }
-
-        for id in expired {
-            self.rules.remove(&id);
-        }
-        if !any_due {
-            return;
-        }
-
-        // 测量本批注入 wall-clock（归一到单事件）供 stress 诊断；仅在采样时测量，不驱动降频。
-        let event_count = events.len();
-        let t0 = stats.map(|_| Instant::now());
-        self.dispatch_events(events);
-        if let (Some(stats), Some(t0)) = (stats, t0) {
-            if event_count > 0 {
-                let cost = Instant::now().saturating_duration_since(t0);
-                stats.record_dispatch_cost(cost / event_count as u32);
-            }
-        }
+        self.refresh_cleanup_deadline((self.clock)(now));
     }
 
-    /// 申请目标键的注入所有权。引擎不为业务取舍兜底：不判断该键是否被用户物理按住
-    /// （把某键设为连发 target 即声明它会被不断按下弹起，是业务层取舍）。同一目标键被多条
-    /// 规则共享时只发一次 down，避免相互打断。单次 entry 查找区分首占用与共享。
-    /// 取 `&mut target_holds` 而非 `&mut self`，使 `process_due` 能与 `rules.iter_mut()`
-    /// 拆分借用、原地处理规则，省掉每 tick 的 id 克隆与 remove/insert。
     fn acquire_owner(
         target_holds: &mut HashMap<KeyId, HashSet<Arc<str>>>,
         key: KeyId,
@@ -657,12 +942,16 @@ impl SchedulerWorker {
             .collect()
     }
 
-    fn dispatch_events(&self, events: Vec<InputEvent>) {
+    fn dispatch_events(&self, events: Vec<InputEvent>) -> bool {
         if events.is_empty() {
-            return;
+            return true;
         }
-        let results = self.dispatcher.dispatch(&events);
-        self.record_simulated_ledger(&events, &results);
+        let results = dispatch_tracked(self.dispatcher.as_ref(), &self.simulated_keys, &events);
+        let succeeded = results.len() == events.len()
+            && events.iter().zip(&results).all(|(event, result)| {
+                result.was_sent()
+                    || (event.key.is_wheel() && event.is_up && *result == DispatchResult::Noop)
+            });
         if let Some(stats) = &self.stats {
             stats.record_results(&results);
         }
@@ -671,61 +960,74 @@ impl SchedulerWorker {
                 warn!("输入注入失败: key={:?} is_up={}", event.key, event.is_up);
             }
         }
+        succeeded
     }
+}
 
-    fn record_simulated_ledger(&self, events: &[InputEvent], results: &[DispatchResult]) {
-        let mut simulated = self
-            .simulated_keys
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        for (event, result) in events.iter().zip(results.iter().copied()) {
-            if !result.was_sent() {
-                continue;
-            }
-            // 滚轮是瞬发事件（每格 down 即结束、无持续按下态，其 up 走 Noop），不计入「按下中」
-            // 账本，否则只增不减、也会让兜底对账误发滚轮 up。
-            if event.key.is_wheel() {
-                continue;
-            }
-            if event.is_up {
-                decrement_simulated_key(&mut simulated, event.key);
+fn dispatch_tracked(
+    dispatcher: &dyn EventDispatcher,
+    keys: &SimulatedKeys,
+    events: &[InputEvent],
+) -> Vec<DispatchResult> {
+    // 注入与回报落账必须串行，避免兜底释放与新 down 交错后误删新状态；钩子不获取此锁。
+    let mut simulated = keys.lock().unwrap_or_else(|e| e.into_inner());
+    let previous: HashMap<_, _> = events
+        .iter()
+        .filter(|event| !event.is_up)
+        .filter_map(|event| simulated.get(&event.key).map(|count| (event.key, *count)))
+        .collect();
+    for event in events
+        .iter()
+        .filter(|event| !event.is_up && !event.key.is_wheel())
+    {
+        // 发送函数 panic 时结果未知，宁可保留待释放状态，也不能遗漏可能已发送的 down。
+        simulated.insert(event.key, 1);
+    }
+    let results = dispatcher.dispatch(events);
+    for (event, result) in events.iter().zip(results.iter().copied()) {
+        if event.key.is_wheel() {
+            continue;
+        }
+        if event.is_up && result.was_sent() {
+            simulated.remove(&event.key);
+        } else if !event.is_up && !result.was_sent() {
+            if let Some(count) = previous.get(&event.key) {
+                simulated.insert(event.key, *count);
             } else {
-                *simulated.entry(event.key).or_default() += 1;
+                simulated.remove(&event.key);
             }
         }
     }
+    results
 }
 
-pub(crate) fn release_simulated_keys(simulated_keys: &SimulatedKeys) {
-    let events = simulated_keys
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .drain()
-        .map(|(key, _)| InputEvent::up(key))
-        .collect::<Vec<_>>();
-    if !events.is_empty() {
-        let _ = inject(&events);
-    }
+pub(crate) fn release_simulated_keys(keys: &SimulatedKeys) -> bool {
+    release_simulated_keys_using(keys, inject)
 }
 
-fn decrement_simulated_key(simulated: &mut HashMap<KeyId, usize>, key: KeyId) {
-    let Some(count) = simulated.get_mut(&key) else {
-        return;
-    };
-    if *count <= 1 {
-        simulated.remove(&key);
-    } else {
-        *count -= 1;
+fn release_simulated_keys_using(
+    keys: &SimulatedKeys,
+    send: impl FnOnce(&[InputEvent]) -> Vec<DispatchResult>,
+) -> bool {
+    let mut simulated = keys.lock().unwrap_or_else(|e| e.into_inner());
+    let events: Vec<_> = simulated.keys().copied().map(InputEvent::up).collect();
+    if events.is_empty() {
+        return true;
     }
-}
-
-fn hold_duration(interval_ms: u32) -> Duration {
-    if interval_ms <= 1 {
-        return Duration::ZERO;
+    if let Ok(results) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send(&events))) {
+        for (event, result) in events.iter().zip(results) {
+            if result.was_sent() {
+                simulated.remove(&event.key);
+            }
+        }
     }
-    let interval = interval_ms as u64;
-    let hold = (interval / 3).clamp(1, 30).min(interval - 1);
-    Duration::from_millis(hold)
+    if !simulated.is_empty() {
+        warn!(
+            "仍有 {} 个模拟按键释放失败，保留账本供后续重试",
+            simulated.len()
+        );
+    }
+    simulated.is_empty()
 }
 
 #[cfg(not(windows))]
@@ -963,6 +1265,11 @@ mod platform_wait {
 mod sim_tests;
 
 #[cfg(test)]
+mod safety_tests;
+#[cfg(test)]
+mod sequence_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use qzh_profile::key_id::MouseButton;
@@ -1012,6 +1319,9 @@ mod tests {
             simulated_keys: simulated_keys.clone(),
             min_interval_ms: 1,
             tap_seq: 0,
+            progress: Default::default(),
+            clock: |now| now,
+            cleanup_at: None,
         };
         (worker, simulated_keys)
     }
@@ -1021,10 +1331,12 @@ mod tests {
             id: id.to_string(),
             enabled: true,
             trigger_key: KeyId::Keyboard(0x51),
-            target_key,
+            steps: vec![qzh_profile::profile::OutputStep {
+                key: target_key,
+                interval_ms: 10,
+            }],
             mode: BurstMode::Toggle,
             stop_key: None,
-            interval_ms: 10,
             group: None,
         })
     }
@@ -1044,6 +1356,8 @@ mod tests {
         worker.handle_command(SchedulerCommand::Start {
             rule: rule("old", KeyId::Keyboard(0x45)),
             generation: 0,
+            run_id: 1,
+            once: false,
         });
 
         assert!(worker.rules.is_empty());
@@ -1056,7 +1370,10 @@ mod tests {
         worker.handle_command(SchedulerCommand::Start {
             rule: rule("new", KeyId::Keyboard(0x45)),
             generation: 2,
+            run_id: 1,
+            once: false,
         });
+        worker.process_due(Instant::now() + Duration::from_millis(1));
         let (ack_tx, ack_rx) = mpsc::channel();
 
         worker.handle_command(SchedulerCommand::StopAll {
@@ -1064,7 +1381,7 @@ mod tests {
             ack: Some(ack_tx),
         });
 
-        assert!(ack_rx.try_recv().is_ok());
+        assert_eq!(ack_rx.try_recv(), Ok(true));
         assert!(worker.rules.contains_key("new"));
         assert_eq!(worker.current_generation, 2);
     }
@@ -1134,6 +1451,9 @@ mod tests {
             simulated_keys: simulated_keys.clone(),
             min_interval_ms: 1,
             tap_seq: 0,
+            progress: Default::default(),
+            clock: |now| now,
+            cleanup_at: None,
         };
 
         worker.cleanup_all();

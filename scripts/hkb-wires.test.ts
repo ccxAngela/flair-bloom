@@ -29,7 +29,7 @@ function rule(
     id,
     enabled: true,
     trigger_key: kb(trigger),
-    target_key: kb(target),
+    steps: [{ key: kb(target), interval_ms: 50 }],
     mode,
     stop_key: stop === undefined ? null : kb(stop),
   };

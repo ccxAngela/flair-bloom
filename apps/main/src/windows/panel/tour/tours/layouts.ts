@@ -42,7 +42,7 @@ export const layouts: TourDef = {
       body: p(
         '实心是长按连发、描边是切换连发、虚线是已停用；数字角标是互斥组的编号，实心描边同理。',
         '正在连发的键有明显描边、呼吸光晕和角落亮点；暂停时变淡、停止呼吸并显示 ⏸。',
-        '⚠ 表示这个键上有横版画不出来的规则（启动键和连发键不同、或同一个键上有多条），回竖版改；鼠标移上去会画出它和别的键的走线。',
+        '⚠ 表示多步队列、启动与输出不同或同键多规则等复杂配置；点击进入竖版编辑，悬停能看全部输出键的走线。',
       ),
       prepare: (host) => host.setLayout('horizontal'),
     },
@@ -50,7 +50,7 @@ export const layouts: TourDef = {
       id: 'interval',
       target: 'hbar-interval',
       title: '横版共用一个间隔',
-      body: p('横版上点出来的规则都用这一个间隔，要分别设不同间隔请回竖版。'),
+      body: p('横版上点出来的一步规则共用这个间隔，多步队列不受影响；分别设置请在竖版编辑。'),
       prepare: (host) => host.setLayout('horizontal'),
     },
     {

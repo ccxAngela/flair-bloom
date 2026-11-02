@@ -75,6 +75,9 @@ impl Sim {
             // 纯时序 golden 断言不限速；下限本身的行为单独由 min_interval_floor_* 测试覆盖。
             min_interval_ms: 1,
             tap_seq: 0,
+            progress: Default::default(),
+            clock: |now| now,
+            cleanup_at: None,
         };
         let rules = rules
             .into_iter()
@@ -102,10 +105,15 @@ impl Sim {
         self.worker.handle_command(SchedulerCommand::Start {
             rule,
             generation: 0,
+            run_id: 1,
+            once: false,
         });
         // Start 内部用真实 `Instant::now()` 设了 next_at；覆盖成当前虚拟时刻，锚定虚拟时钟。
         if let Some(sr) = self.worker.rules.get_mut(id) {
-            sr.next_at = self.base + Duration::from_millis(self.now_ms);
+            let now = self.base + Duration::from_millis(self.now_ms);
+            sr.queue =
+                crate::output_queue::OutputQueue::new(self.rules[id].steps.clone(), now).unwrap();
+            sr.throttle_at = now;
         }
         self.drain_now();
     }
@@ -196,10 +204,12 @@ fn rule(id: &str, target: KeyId, interval_ms: u32, group: Option<String>) -> Bur
         enabled: true,
         // 调度器层不看 trigger/mode/stop（那是引擎层的事），固定占位即可。
         trigger_key: KeyId::Keyboard(0x51),
-        target_key: target,
+        steps: vec![qzh_profile::profile::OutputStep {
+            key: target,
+            interval_ms,
+        }],
         mode: BurstMode::Hold,
         stop_key: None,
-        interval_ms,
         group,
     }
 }
@@ -368,4 +378,133 @@ fn floor_scales_with_active_rule_count_to_cap_total_rate() {
         .filter(|s| s.contains(":dn:K45"))
         .collect();
     assert_eq!(downs, vec!["1:dn:K45", "31:dn:K45", "61:dn:K45"]);
+}
+
+fn queue() -> BurstRule {
+    let mut r = hold("queue", E, 50);
+    r.steps.extend([
+        qzh_profile::OutputStep {
+            key: E,
+            interval_ms: 80,
+        },
+        qzh_profile::OutputStep {
+            key: R_KEY,
+            interval_ms: 40,
+        },
+    ]);
+    r
+}
+
+#[test]
+fn contending_queues_finish_each_step_without_starving_later_rules() {
+    let rules = (0..10)
+        .map(|index| hold(&format!("r{index:02}"), E, 50))
+        .collect();
+    let mut sim = Sim::new(rules);
+    sim.set_min_interval(10);
+    for index in 0..10 {
+        sim.start(&format!("r{index:02}"));
+    }
+    sim.advance(200);
+    assert!(sim
+        .worker
+        .rules
+        .values()
+        .all(|rule| rule.queue.completed_cycles() >= 1));
+    sim.stop_all();
+    assert!(sim.worker.simulated_keys.lock().unwrap().is_empty());
+}
+
+#[test]
+fn queue_preserves_repeated_keys_and_all_intervals_across_cycles() {
+    let mut sim = Sim::new(vec![queue()]);
+    sim.start("queue");
+    sim.advance(370);
+    let downs: Vec<_> = sim
+        .timeline
+        .iter()
+        .filter(|(_, event)| !event.is_up)
+        .map(|(ms, event)| (*ms, event.key))
+        .collect();
+    assert_eq!(
+        downs,
+        vec![
+            (1, E),
+            (51, E),
+            (131, R_KEY),
+            (171, E),
+            (221, E),
+            (301, R_KEY),
+            (341, E)
+        ]
+    );
+    assert_eq!(
+        sim.timeline.iter().filter(|(_, event)| event.is_up).count(),
+        downs.len()
+    );
+    assert_eq!(sim.worker.rules["queue"].queue.completed_cycles(), 2);
+}
+
+#[test]
+fn pause_releases_down_and_resumes_remaining_wait_without_replaying_step() {
+    for pause_at in [10, 30] {
+        let mut sim = Sim::new(vec![queue()]);
+        sim.start("queue");
+        sim.advance(pause_at);
+        sim.worker
+            .pause_rule("queue", sim.base + Duration::from_millis(sim.now_ms));
+        sim.drain_now();
+        assert!(sim.worker.simulated_keys.lock().unwrap().is_empty());
+        let remaining = sim.worker.rules["queue"].queue.paused_remaining().unwrap();
+        assert_eq!(remaining.as_millis(), 51 - u128::from(pause_at));
+        let before = sim.timeline.len();
+        sim.advance(1000);
+        assert_eq!(sim.timeline.len(), before);
+        sim.worker
+            .resume_rule("queue", sim.base + Duration::from_millis(sim.now_ms));
+        sim.advance(remaining.as_millis() as u64);
+        let downs: Vec<_> = sim
+            .timeline
+            .iter()
+            .filter(|(_, event)| !event.is_up)
+            .map(|(ms, event)| (*ms, event.key))
+            .collect();
+        assert_eq!(downs, vec![(1, E), (1051, E)]);
+        assert_eq!(sim.worker.rules["queue"].queue.step_index(), 1);
+    }
+}
+
+#[test]
+fn stop_during_long_interval_discards_all_future_steps_and_restart_is_first_step() {
+    let mut r = queue();
+    r.steps[0].interval_ms = 10000;
+    let mut sim = Sim::new(vec![r]);
+    sim.start("queue");
+    sim.advance(5);
+    sim.stop("queue");
+    let before = sim.timeline.len();
+    sim.advance(20000);
+    assert_eq!(sim.timeline.len(), before);
+    assert!(sim.worker.simulated_keys.lock().unwrap().is_empty());
+    sim.start("queue");
+    sim.advance(1);
+    assert_eq!(sim.worker.rules["queue"].queue.step_index(), 0);
+    assert_eq!(sim.timeline.last().unwrap().1.key, E);
+}
+
+#[test]
+fn one_shot_queue_finishes_the_whole_sequence_exactly_once() {
+    let mut sim = Sim::new(vec![queue()]);
+    sim.start("queue");
+    sim.worker.rules.get_mut("queue").unwrap().one_shot = true;
+    sim.advance(500);
+    let downs: Vec<_> = sim
+        .timeline
+        .iter()
+        .filter(|(_, event)| !event.is_up)
+        .map(|(_, event)| event.key)
+        .collect();
+    assert_eq!(downs, vec![E, E, R_KEY]);
+    assert!(sim.worker.rules.is_empty());
+    assert!(sim.worker.simulated_keys.lock().unwrap().is_empty());
 }

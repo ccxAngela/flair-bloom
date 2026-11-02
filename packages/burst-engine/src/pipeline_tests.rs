@@ -10,6 +10,63 @@ use qzh_profile::key_id::KeyId;
 use qzh_profile::profile::BurstMode;
 
 #[test]
+fn recording_stops_existing_output_blocks_rule_start_and_global_stop_ends_session() {
+    let trigger = KeyId::Keyboard(81);
+    let (engine, recorder) = setup(vec![rule(
+        "hold",
+        BurstMode::Hold,
+        trigger,
+        KeyId::Keyboard(69),
+    )]);
+    engine.on_key_press(trigger);
+    assert_eq!(engine.get_active_ids(), vec!["hold"]);
+    engine.start_recording(KeyId::Keyboard(123)).unwrap();
+    assert!(engine.get_active_ids().is_empty());
+    recorder.clear();
+    engine.on_key_release(trigger);
+    engine.on_key_press(trigger);
+    engine.on_key_press(trigger);
+    engine.on_key_release(trigger);
+    assert!(recorder.cmds().is_empty());
+    assert_eq!(engine.get_recording().steps.len(), 1);
+    engine.set_global_enabled(false, false);
+    assert!(!engine.get_recording().recording);
+    assert!(engine.get_active_ids().is_empty());
+}
+
+#[test]
+fn preview_uses_one_shot_contract_and_cannot_stop_an_unrelated_rule() {
+    let (engine, recorder) = setup(vec![]);
+    let id = engine
+        .preview_output(vec![
+            qzh_profile::OutputStep {
+                key: KeyId::Keyboard(69),
+                interval_ms: 50,
+            },
+            qzh_profile::OutputStep {
+                key: KeyId::Keyboard(82),
+                interval_ms: 80,
+            },
+        ])
+        .unwrap();
+    assert!(recorder
+        .cmds()
+        .iter()
+        .any(|command| command.starts_with("preview:")));
+    assert_eq!(engine.get_active_ids(), vec![id.clone()]);
+    assert!(engine.stop_preview("ordinary-rule").is_err());
+    engine.stop_preview(&id).unwrap();
+    assert!(engine.get_active_ids().is_empty());
+    engine.set_global_enabled(false, false);
+    assert!(engine
+        .preview_output(vec![qzh_profile::OutputStep {
+            key: KeyId::Keyboard(69),
+            interval_ms: 50
+        }])
+        .is_err());
+}
+
+#[test]
 fn hold_press_release_emits_start_then_stop_same_generation() {
     let trigger = KeyId::Keyboard(0x51);
     let (engine, rec) = setup(vec![rule(

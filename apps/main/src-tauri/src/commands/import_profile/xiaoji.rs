@@ -143,17 +143,19 @@ fn converted(data: &str) -> (Vec<BurstRule>, usize, Vec<String>) {
             id: make_id(),
             enabled,
             trigger_key: key,
-            target_key: key,
+            steps: vec![qzh_profile::profile::OutputStep {
+                key,
+                interval_ms: delay.saturating_add(5).clamp(
+                    u64::from(MIN_EFFECTIVE_INTERVAL_MS),
+                    u64::from(MAX_INTERVAL_MS),
+                ) as u32,
+            }],
             mode: if raw_mode == "hold" {
                 BurstMode::Hold
             } else {
                 BurstMode::Toggle
             },
             stop_key: None,
-            interval_ms: delay.saturating_add(5).clamp(
-                u64::from(MIN_EFFECTIVE_INTERVAL_MS),
-                u64::from(MAX_INTERVAL_MS),
-            ) as u32,
             group: (raw_mode == "independent").then(|| "小叽独立切换".into()),
         });
         if raw_mode == "toggle" {
@@ -214,8 +216,16 @@ pub(super) fn parse_preview(data: &str, name: &str) -> ImportPreview {
         suggested_name: name.into(),
         rule_count: rules.len(),
         skipped_count: skipped,
-        interval_ms: rules.iter().map(|r| r.interval_ms).min().unwrap_or(0),
-        interval_max_ms: rules.iter().map(|r| r.interval_ms).max().unwrap_or(0),
+        interval_ms: rules
+            .iter()
+            .map(|r| r.steps[0].interval_ms)
+            .min()
+            .unwrap_or(0),
+        interval_max_ms: rules
+            .iter()
+            .map(|r| r.steps[0].interval_ms)
+            .max()
+            .unwrap_or(0),
         warnings,
         global_toggle: parse_hotkeys(data).global_toggle,
         global_stop: None,
@@ -237,9 +247,9 @@ mod tests {
         assert_eq!(profiles(&data)[1], (1, "二".into()));
         let rules = parse_rules(&data);
         assert_eq!(rules.len(), 3);
-        assert_eq!(rules[0].interval_ms, 35);
+        assert_eq!(rules[0].steps[0].interval_ms, 35);
         assert_eq!(rules[0].mode, BurstMode::Hold);
-        assert_eq!(rules[1].target_key, KeyId::Mouse(MouseButton::X1));
+        assert_eq!(rules[1].steps[0].key, KeyId::Mouse(MouseButton::X1));
         assert!(rules[1].group.is_some());
         assert!(!rules[2].enabled);
         assert_eq!(

@@ -94,7 +94,8 @@
 - 了解产品使用人群、分布与留存，反馈可关联手动诊断（[接入草案](docs/roadmaps/product-insights.md)）。
 - 桌宠随连发和键鼠／手柄输入做动画反馈（[设计稿](docs/roadmaps/pet-mode.md)）。
 - 界面迁到 Vue 与 xwink 组件库（[路线图](docs/roadmaps/vue-migration.md)）。
-- 宏录制回放、随机抖动。
+- 按键队列与录制的 Windows 四通道真机验收：实现与自动化已完成，组合键独立评估（[实施记录](docs/roadmaps/output-sequences.md)）。
+- 随机抖动。
 
 ---
 

@@ -1,7 +1,6 @@
 //! 启动期配置文件加载与初始化。
 
 use std::sync::Arc;
-use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 use tracing::{error, info, warn};
 
@@ -14,16 +13,31 @@ pub fn load_or_init_profile(app: &tauri::AppHandle, engine: &Arc<BurstEngine>) {
     let active_path: Option<String> = app.store(crate::STORE_PATH).ok().and_then(|store| {
         store
             .get(crate::commands::profile::ACTIVE_PATH_KEY)
+            .or_else(|| store.get("activeProfilePath"))
             .and_then(|v| v.as_str().map(|s| s.to_string()))
     });
 
-    let profiles_dir = match app.path().app_data_dir() {
-        Ok(d) => d.join("profiles"),
+    let profiles_dir = match crate::commands::profile::profiles_dir(app) {
+        Ok(d) => d,
         Err(e) => {
             error!("无法获取应用数据目录: {}", e);
             return;
         }
     };
+
+    let active_path = active_path.map(|path| {
+        if std::path::Path::new(&path)
+            .file_name()
+            .is_some_and(|name| name == "defults.qzh")
+        {
+            profiles_dir
+                .join("defaults.qzh")
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            path
+        }
+    });
 
     match active_path {
         Some(path) => match load_profile_from_path(&path, &profiles_dir) {
@@ -34,6 +48,12 @@ pub fn load_or_init_profile(app: &tauri::AppHandle, engine: &Arc<BurstEngine>) {
                 crate::commands::profile::sanitize_and_record(app, &mut profile);
                 engine.set_hotkeys(profile.hotkeys);
                 engine.set_rules(profile.rules);
+                if let Some(file_name) = std::path::Path::new(&path).file_name() {
+                    crate::commands::profile::set_active_path(
+                        app,
+                        &profiles_dir.join(file_name).to_string_lossy(),
+                    );
+                }
                 info!("已加载配置: {}", path);
             }
             Err(e) => {

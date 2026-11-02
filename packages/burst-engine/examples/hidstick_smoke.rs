@@ -54,10 +54,12 @@ fn main() {
         id: "smoke".to_string(),
         enabled: true,
         trigger_key: KeyId::Keyboard(F13),
-        target_key: KeyId::Keyboard(Q),
+        steps: vec![qzh_profile::profile::OutputStep {
+            key: KeyId::Keyboard(Q),
+            interval_ms: INTERVAL_MS,
+        }],
         mode: BurstMode::Hold,
         stop_key: None,
-        interval_ms: INTERVAL_MS,
         group: None,
     }]);
     engine.set_global_enabled(true, false);

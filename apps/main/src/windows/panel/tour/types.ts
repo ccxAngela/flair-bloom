@@ -17,7 +17,7 @@ export interface TourRule {
   mode: 'hold' | 'toggle';
   enabled: boolean;
   trigger_key: KeyId;
-  target_key: KeyId;
+  steps: { key: KeyId; interval_ms: number }[];
   group: string | null;
 }
 

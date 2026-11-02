@@ -23,10 +23,12 @@ fn rule(id: &str, mode: BurstMode, trigger: KeyId, target: KeyId, interval: u32)
         id: id.into(),
         enabled: true,
         trigger_key: trigger,
-        target_key: target,
+        steps: vec![crate::profile::OutputStep {
+            key: target,
+            interval_ms: interval,
+        }],
         mode,
         stop_key: None,
-        interval_ms: interval,
         group: None,
     }
 }
@@ -125,7 +127,77 @@ fn burst_rule_serializes_keyid_shape() {
     );
     let v = serde_json::to_value(&r).unwrap();
     assert_eq!(v["trigger_key"], json!({"kind":"keyboard","code":81}));
-    assert_eq!(v["target_key"], json!({"kind":"mouse","code":"left"}));
+    assert_eq!(v["steps"][0]["key"], json!({"kind":"mouse","code":"left"}));
+    assert!(v.get("target_key").is_none());
+}
+
+#[test]
+fn legacy_rule_becomes_a_single_step_and_old_reader_rejects_sequences() {
+    #[derive(serde::Deserialize)]
+    struct LegacyRule {
+        #[serde(rename = "target_key")]
+        _target_key: KeyId,
+        #[serde(rename = "interval_ms")]
+        _interval_ms: u32,
+    }
+    let legacy = json!({"id":"old", "enabled":true, "trigger_key":{"kind":"keyboard","code":81},
+        "target_key":{"kind":"keyboard","code":69}, "interval_ms":50, "mode":"toggle"});
+    assert!(serde_json::from_value::<LegacyRule>(legacy.clone()).is_ok());
+    let mut loaded: BurstRule = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        loaded.steps,
+        vec![OutputStep {
+            key: kbd(69),
+            interval_ms: 50
+        }]
+    );
+    loaded.steps.push(OutputStep {
+        key: kbd(82),
+        interval_ms: 1500,
+    });
+    let written = serde_json::to_value(&loaded).unwrap();
+    assert!(serde_json::from_value::<LegacyRule>(written.clone()).is_err());
+    assert_eq!(
+        serde_json::from_value::<BurstRule>(written).unwrap().steps,
+        loaded.steps
+    );
+}
+
+#[test]
+fn rejects_empty_oversized_mixed_and_invalid_later_steps() {
+    let mut r = rule("x", BurstMode::Toggle, kbd(81), kbd(69), 50);
+    r.steps.clear();
+    assert!(matches!(
+        r.validate(),
+        Err(ProfileError::InvalidStepCount(0))
+    ));
+    r.steps = vec![
+        OutputStep {
+            key: kbd(69),
+            interval_ms: 50
+        };
+        MAX_OUTPUT_STEPS + 1
+    ];
+    assert!(r.validate().is_err());
+    r.steps = vec![
+        OutputStep {
+            key: kbd(69),
+            interval_ms: 50,
+        },
+        OutputStep {
+            key: kbd(82),
+            interval_ms: 0,
+        },
+    ];
+    assert!(matches!(
+        r.validate(),
+        Err(ProfileError::InvalidInterval(0))
+    ));
+    r.steps.pop();
+    let mut mixed = serde_json::to_value(&r).unwrap();
+    mixed["target_key"] = json!({"kind":"keyboard","code":70});
+    mixed["interval_ms"] = json!(10);
+    assert!(serde_json::from_value::<BurstRule>(mixed).is_err());
 }
 
 #[test]

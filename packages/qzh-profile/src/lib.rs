@@ -7,9 +7,9 @@
 
 pub mod key_id;
 pub mod key_policy;
-pub mod macro_seq;
 pub mod profile;
 pub mod schema_migrate;
+pub mod storage;
 
 pub use key_id::{KeyId, MouseButton};
 pub use key_policy::{
@@ -17,9 +17,9 @@ pub use key_policy::{
     KeySlot, SanitizeReport, SlotPolicy,
 };
 pub use profile::{
-    sanitize_signature, Advanced, BurstMode, BurstRule, Hotkeys, Profile, ProfileError,
-    ProfileMeta, CURRENT_SCHEMA_VERSION, DEFAULT_INTERVAL_MS, MAX_INTERVAL_MS, MAX_RULES,
-    MAX_SIGNATURE_CHARS, MIN_EFFECTIVE_INTERVAL_MS, MIN_INTERVAL_MS,
+    sanitize_signature, Advanced, BurstMode, BurstRule, Hotkeys, OutputStep, Profile, ProfileError,
+    ProfileMeta, CURRENT_SCHEMA_VERSION, DEFAULT_INTERVAL_MS, MAX_INTERVAL_MS, MAX_OUTPUT_STEPS,
+    MAX_RULES, MAX_SIGNATURE_CHARS, MIN_EFFECTIVE_INTERVAL_MS, MIN_INTERVAL_MS,
 };
 pub use schema_migrate::migrate_profile;
 
@@ -106,17 +106,22 @@ mod tests {
             id: "r".into(),
             enabled: true,
             trigger_key: KeyId::Keyboard(0x51),
-            target_key: KeyId::Keyboard(0x45),
+            steps: vec![crate::profile::OutputStep {
+                key: KeyId::Keyboard(0x45),
+                interval_ms: 5,
+            }],
             mode: BurstMode::Hold,
             stop_key: None,
-            interval_ms: 5,
             group: None,
         });
         save_to_path(&path, &profile).unwrap();
 
         // 加载时被钳到有效下限。
         let loaded = load_from_path(&path).unwrap();
-        assert_eq!(loaded.rules[0].interval_ms, MIN_EFFECTIVE_INTERVAL_MS);
+        assert_eq!(
+            loaded.rules[0].steps[0].interval_ms,
+            MIN_EFFECTIVE_INTERVAL_MS
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -139,10 +144,12 @@ mod tests {
             id: "r".into(),
             enabled: true,
             trigger_key: KeyId::Keyboard(0x51),
-            target_key: KeyId::Keyboard(0x51),
+            steps: vec![crate::profile::OutputStep {
+                key: KeyId::Keyboard(0x51),
+                interval_ms: 0,
+            }],
             mode: BurstMode::Hold,
             stop_key: None,
-            interval_ms: 0,
             group: None,
         });
         assert!(matches!(

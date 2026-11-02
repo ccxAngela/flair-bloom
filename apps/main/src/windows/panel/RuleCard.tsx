@@ -9,6 +9,9 @@ import KeyCapture, {
   type KeyPolicies,
 } from './components/KeyCapture';
 import type { ConflictSeverity } from './conflicts';
+import SequenceEditor from './components/SequenceEditor';
+import type { OutputStep } from './outputSequence';
+import type { RuleProgress } from './useRuleStates';
 
 type BurstMode = 'hold' | 'toggle';
 
@@ -17,10 +20,9 @@ export interface CardRule {
   id: string;
   enabled: boolean;
   trigger_key: KeyId;
-  target_key: KeyId;
+  steps: OutputStep[];
   mode: BurstMode;
   stop_key: KeyId | null;
-  interval_ms: number;
   group: string | null;
 }
 
@@ -33,6 +35,7 @@ export interface CardDragHandlers {
 
 interface Props {
   rule: CardRule;
+  progress?: RuleProgress;
   isActive: boolean;
   isPaused: boolean;
   /** 教程判定的「最后一条可见规则」（`lastRule`），承载教程锚点 `rule-latest`。 */
@@ -48,6 +51,7 @@ interface Props {
   groups: string[];
   drag: CardDragHandlers;
   onPatch: (patch: Partial<CardRule>) => void;
+  onSaveSequence: (steps: OutputStep[]) => Promise<void>;
   onSetMode: (mode: BurstMode) => void;
   onToggleAdvanced: () => void;
   onDelete: () => void;
@@ -67,6 +71,7 @@ function other(mode: BurstMode): BurstMode {
 
 export default function RuleCard({
   rule,
+  progress,
   isActive,
   isPaused,
   isLatest,
@@ -80,6 +85,7 @@ export default function RuleCard({
   groups,
   drag,
   onPatch,
+  onSaveSequence,
   onSetMode,
   onToggleAdvanced,
   onDelete,
@@ -91,9 +97,11 @@ export default function RuleCard({
 }: Props) {
   const menuRef = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [sequenceOpen, setSequenceOpen] = useState(false);
+  const multiple = rule.steps.length > 1;
   const isToggle = rule.mode === 'toggle';
   // 长按键与连发键分开时把「按住哪个键」提到主行：插队要按住的就是它，不能藏在高级设置里。
-  const holdSplit = !isToggle && !keyEq(rule.trigger_key, rule.target_key);
+  const holdSplit = !isToggle && (multiple || !keyEq(rule.trigger_key, rule.steps[0].key));
   const showTrigger = isToggle || holdSplit;
   const nextMode = other(rule.mode);
 
@@ -188,30 +196,42 @@ export default function RuleCard({
             </>
           )}
           <div className="rule-field" data-tour="rule-key">
-            <label>连发按键</label>
-            <KeyCapture
-              onReject={onKeyReject}
-              policy={targetPolicy}
-              value={rule.target_key}
-              onChange={(vk) => {
-                if (!vk) return;
-                const patch: Partial<CardRule> = { target_key: vk };
-                if (!showTrigger && !showAdvanced) patch.trigger_key = vk;
-                onPatch(patch);
-                onTargetCaptured();
-              }}
-              conflict={showTrigger || !showAdvanced ? conflict : null}
-            />
+            <label>{multiple ? '输出队列' : '连发按键'}</label>
+            {multiple ? (
+              <button
+                type="button"
+                className="key-capture sequence-open"
+                onClick={() => setSequenceOpen(true)}
+              >
+                {rule.steps.length} 步 · 编辑队列
+              </button>
+            ) : (
+              <KeyCapture
+                onReject={onKeyReject}
+                policy={targetPolicy}
+                value={rule.steps[0].key}
+                onChange={(vk) => {
+                  if (!vk) return;
+                  const patch: Partial<CardRule> = { steps: [{ ...rule.steps[0], key: vk }] };
+                  if (!showTrigger && !showAdvanced) patch.trigger_key = vk;
+                  onPatch(patch);
+                  onTargetCaptured();
+                }}
+                conflict={showTrigger || !showAdvanced ? conflict : null}
+              />
+            )}
           </div>
-          <div className="rule-field rule-interval" data-tour="rule-interval">
-            <label>间隔</label>
-            <IntervalInput
-              value={rule.interval_ms}
-              min={intervalMin}
-              max={intervalMax}
-              onChange={(v) => onPatch({ interval_ms: v })}
-            />
-          </div>
+          {!multiple && (
+            <div className="rule-field rule-interval" data-tour="rule-interval">
+              <label>间隔</label>
+              <IntervalInput
+                value={rule.steps[0].interval_ms}
+                min={intervalMin}
+                max={intervalMax}
+                onChange={(v) => onPatch({ steps: [{ ...rule.steps[0], interval_ms: v }] })}
+              />
+            </div>
+          )}
         </div>
         <input
           type="checkbox"
@@ -222,6 +242,33 @@ export default function RuleCard({
           aria-label="启用"
         />
       </div>
+      {!multiple && !sequenceOpen && (
+        <button
+          type="button"
+          className="expand-btn"
+          data-tour="sequence-add"
+          onClick={() => setSequenceOpen(true)}
+        >
+          ＋ 添加步骤／录制队列
+        </button>
+      )}
+      {sequenceOpen && (
+        <SequenceEditor
+          steps={rule.steps}
+          policy={policies.target}
+          min={intervalMin}
+          max={intervalMax}
+          onReject={onKeyReject}
+          onClose={() => setSequenceOpen(false)}
+          onSave={onSaveSequence}
+        />
+      )}
+      {progress && (multiple || progress.error || progress.max_lateness_ms > 0) && (
+        <p className="sequence-progress" role="status">
+          {progress.error ??
+            `${isPaused ? '暂停' : '执行'}第 ${progress.step_index + 1}/${progress.step_count} 步 · 已完成 ${progress.completed_cycles} 轮${progress.max_lateness_ms > 0 ? ` · 最近延后 ${progress.lateness_ms}ms，最大 ${progress.max_lateness_ms}ms` : ''}`}
+        </p>
+      )}
       {showAdvanced && (
         <div className="rule-advanced">
           {isToggle ? (

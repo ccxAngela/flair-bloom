@@ -227,13 +227,15 @@ fn convert(data: &str) -> Converted {
                     .and_then(Value::as_bool)
                     .unwrap_or(true),
             trigger_key,
-            target_key,
+            steps: vec![qzh_profile::profile::OutputStep {
+                key: target_key,
+                interval_ms: period.clamp(
+                    u64::from(MIN_EFFECTIVE_INTERVAL_MS),
+                    u64::from(MAX_INTERVAL_MS),
+                ) as u32,
+            }],
             mode,
             stop_key: None,
-            interval_ms: period.clamp(
-                u64::from(MIN_EFFECTIVE_INTERVAL_MS),
-                u64::from(MAX_INTERVAL_MS),
-            ) as u32,
             group,
         });
     }
@@ -288,13 +290,13 @@ pub(super) fn parse_preview(data: &str, dir_name: &str) -> ImportPreview {
     let min = converted
         .rules
         .iter()
-        .map(|r| r.interval_ms)
+        .map(|r| r.steps[0].interval_ms)
         .min()
         .unwrap_or(0);
     let max = converted
         .rules
         .iter()
-        .map(|r| r.interval_ms)
+        .map(|r| r.steps[0].interval_ms)
         .max()
         .unwrap_or(0);
     ImportPreview {
@@ -327,7 +329,7 @@ mod tests {
         assert_eq!(preview.global_stop, Some(KeyId::Keyboard(121)));
         let rules = parse_rules(&data);
         assert_eq!(rules[0].trigger_key, KeyId::Mouse(MouseButton::X1));
-        assert_eq!(rules[0].target_key, KeyId::Mouse(MouseButton::WheelDown));
+        assert_eq!(rules[0].steps[0].key, KeyId::Mouse(MouseButton::WheelDown));
         assert_eq!(rules[0].group.as_deref(), Some("衍天轮转"));
     }
 

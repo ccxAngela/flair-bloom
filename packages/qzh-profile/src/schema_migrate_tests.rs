@@ -2,6 +2,31 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn migrate_v4_normalizes_output_without_changing_rule_controls() {
+    let input = json!({"schema_version":4,"rules":[{"id":"r", "enabled":false,
+        "trigger_key":{"kind":"keyboard","code":81}, "target_key":{"kind":"keyboard","code":69},
+        "interval_ms":1500,"mode":"toggle","stop_key":{"kind":"keyboard","code":82},"group":"g"}]});
+    let migrated = migrate_profile(input.clone(), 4).unwrap();
+    assert_eq!(migrated["schema_version"], 5);
+    assert_eq!(
+        migrated["rules"][0]["steps"],
+        json!([{"key":{"kind":"keyboard","code":69},"interval_ms":1500}])
+    );
+    assert_eq!(
+        migrated["rules"][0]["trigger_key"],
+        input["rules"][0]["trigger_key"]
+    );
+    assert_eq!(
+        migrated["rules"][0]["stop_key"],
+        input["rules"][0]["stop_key"]
+    );
+    assert_eq!(migrated["rules"][0]["group"], "g");
+    assert_eq!(migrated["rules"][0]["enabled"], false);
+    assert!(migrated["rules"][0].get("target_key").is_none());
+    assert!(migrated["rules"][0].get("interval_ms").is_none());
+}
+
+#[test]
 fn migrate_from_current_is_noop() {
     // from == CURRENT_SCHEMA_VERSION 时不应调用 migrate_step，原值原样返回
     let v = json!({"hello": "world"});
@@ -40,7 +65,7 @@ fn migrate_v1_to_v2_wraps_required_keyboard_fields() {
         json!({"kind":"keyboard","code":0x51})
     );
     assert_eq!(
-        out["rules"][0]["target_key"],
+        out["rules"][0]["steps"][0]["key"],
         json!({"kind":"keyboard","code":0x46})
     );
     assert!(out["rules"][0]["stop_key"].is_null());

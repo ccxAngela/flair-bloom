@@ -1,3 +1,4 @@
+import { isSimpleRule, type OutputStep } from './outputSequence.ts';
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import WireOverlay from './WireOverlay';
 import { buildWires, wiredKeys } from './hkbWires';
@@ -6,7 +7,6 @@ import ContextMenu, { type ContextMenuItem } from './components/ContextMenu';
 import IntervalInput from './components/IntervalInput';
 import {
   keyboardKey,
-  keyEq,
   keyLabel,
   mouseKey,
   type KeyId,
@@ -35,11 +35,10 @@ export interface HRule {
   id: string;
   enabled: boolean;
   trigger_key: KeyId;
-  target_key: KeyId;
+  steps: OutputStep[];
   stop_key: KeyId | null;
   mode: 'hold' | 'toggle';
   group: string | null;
-  interval_ms: number;
 }
 
 interface Props {
@@ -60,6 +59,7 @@ interface Props {
   onIntervalChange: (ms: number) => void;
   /** 左键点键：在 无 → 切换 → 长按 → 无 之间轮换。 */
   onCycleKey: (key: KeyId) => void;
+  onEditDetails: () => void;
   onSetEnabled: (ruleId: string, enabled: boolean) => void;
   onSetMode: (rule: HRule, mode: 'hold' | 'toggle') => void;
   onSetGroup: (ruleId: string, group: string | null) => void;
@@ -89,6 +89,7 @@ export default function HorizontalLayout({
   intervalMax,
   onIntervalChange,
   onCycleKey,
+  onEditDetails,
   onSetEnabled,
   onSetMode,
   onSetGroup,
@@ -125,7 +126,7 @@ export default function HorizontalLayout({
   function stateOf(key: KeyId): KeyState {
     const list = byTrigger.get(token(key)) ?? [];
     if (list.length === 0) return { rules: [], single: null, advanced: false };
-    if (list.length === 1 && keyEq(list[0].trigger_key, list[0].target_key)) {
+    if (list.length === 1 && isSimpleRule(list[0])) {
       return { rules: list, single: list[0], advanced: false };
     }
     return { rules: list, single: null, advanced: true };
@@ -134,17 +135,17 @@ export default function HorizontalLayout({
   // 分组顺序 → 序号（图例与键帽角标共用）。
   const groupOrder: string[] = [];
   for (const r of rules) {
-    if (r.group && keyEq(r.trigger_key, r.target_key) && !groupOrder.includes(r.group)) {
+    if (r.group && isSimpleRule(r) && !groupOrder.includes(r.group)) {
       groupOrder.push(r.group);
     }
   }
   const groupIndex = (g: string) => groupOrder.indexOf(g) + 1;
-  const hasAdvanced = rules.some((r) => !keyEq(r.trigger_key, r.target_key));
+  const hasAdvanced = rules.some((r) => !isSimpleRule(r));
 
   function buildMenu(key: KeyId, st: KeyState): ContextMenuItem[] {
     if (st.advanced) {
       return [
-        { label: '此键含高级规则，请在竖版编辑', disabled: true },
+        { label: '在竖版编辑此键的规则', onClick: onEditDetails },
         { type: 'divider' },
         { label: '删除此键全部规则', danger: true, onClick: () => onDeleteKey(key) },
       ];
@@ -238,7 +239,8 @@ export default function HorizontalLayout({
         title={title}
         {...hoverProps}
         onClick={() => {
-          if (!st.advanced) onCycleKey(key);
+          if (st.advanced) onEditDetails();
+          else onCycleKey(key);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -411,7 +413,7 @@ export default function HorizontalLayout({
                 <span className="hbar-group-name">{g}</span>
                 <span className="hbar-group-keys">
                   {rules
-                    .filter((r) => r.group === g && keyEq(r.trigger_key, r.target_key))
+                    .filter((r) => r.group === g && isSimpleRule(r))
                     .map((r) => (
                       <span key={r.id} className="hbar-key-chip">
                         {keyLabel(r.trigger_key)}

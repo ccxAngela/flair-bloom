@@ -30,6 +30,15 @@ impl RecordingScheduler {
 }
 
 impl Scheduler for RecordingScheduler {
+    fn resume_rule(&self, rule_id: String, generation: u64) {
+        self.log(format!("resume:{rule_id}:g{generation}"));
+    }
+    fn play_once(&self, rule: Arc<BurstRule>, generation: u64) {
+        self.log(format!("preview:{}:g{generation}", rule.id));
+    }
+    fn pause_rule(&self, rule_id: String, generation: u64) {
+        self.log(format!("pause:{rule_id}:g{generation}"));
+    }
     fn start_rule(&self, rule: Arc<BurstRule>, generation: u64) {
         self.log(format!("start:{}:g{generation}", rule.id));
     }
@@ -60,10 +69,12 @@ pub(crate) fn rule(id: &str, mode: BurstMode, trigger: KeyId, target: KeyId) -> 
         id: id.to_string(),
         enabled: true,
         trigger_key: trigger,
-        target_key: target,
+        steps: vec![qzh_profile::profile::OutputStep {
+            key: target,
+            interval_ms: 10,
+        }],
         mode,
         stop_key: None,
-        interval_ms: 10,
         group: None,
     }
 }

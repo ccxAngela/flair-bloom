@@ -18,15 +18,17 @@
 - `FileHeader`（19 字节）定义在 `packages/qzh-format/src/header.rs`；`magic + version + flags` 作为 AAD，文件头篡改即验证失败。
 - 密钥派生 HKDF-SHA256，输入为内嵌 32 字节应用常量（`packages/crypto/src/aes.rs` 的 `MASTER_KEY`）。它只作混淆、不保密、不轮换：首个版本起所有用户的 `.qzh` 都用它加密，换掉会让老配置与跨版本分享全部解不开；仓库公开，密钥也能从二进制取出，换了没有收益。真要轮换时用文件头 `flags` 记密钥编号并回退旧钥解密。
 - 高层入口：`qzh_format::read_encrypted(path)` / `write_encrypted(path, &T)` 封装 header + aad + decrypt + parse / serialize + encrypt + atomic-rename；`qzh_profile::load_from_path` / `save_to_path` 在此之上叠加 schema 迁移、`clamp_intervals` 与业务校验。
-- 宏序列文件复用同一格式，schema 由 `macro_seq.rs` 定义（`MAX_STEPS = 256`）。
+- 队列属于规则：`steps: [{ key: KeyId, interval_ms: number }]`，每条规则 1～256 步；单键为一步队列，没有独立宏文件或播放器。旧 `target_key + interval_ms` 仅由反序列化适配器转换，新文件只写 `steps`；同时存在两种形状时拒绝，避免出现两份事实。
 
 ## JSON schema 与迁移（策略 B）
 
-解密后的 JSON 首字段 `schema_version` 驱动 `qzh-profile/src/schema_migrate.rs` 的迁移链（调用 `packages/migrate` 的 `run_migrations()` 泛型运行器）。读取：`version == CURRENT` 直接反序列化；`< CURRENT` 按序执行迁移函数后以新 schema 写回；`> CURRENT` 拒绝加载（`TooNew`）并提示升级应用。每个版本一个迁移函数，不允许跳版本。
+解密后的 JSON 首字段 `schema_version` 驱动 `qzh-profile/src/schema_migrate.rs` 的迁移链（调用 `packages/migrate` 的 `run_migrations()` 泛型运行器）。读取：`version == CURRENT` 直接反序列化；`< CURRENT` 按序迁移到内存中的当前结构，保存时写当前 schema；`> CURRENT` 拒绝加载（`TooNew`）并提示升级应用。每个版本一个迁移函数，不允许跳版本。
 
 **新增字段原则**：一律 `#[serde(default)]` 走向后兼容；仅字段重命名 / 移动 / 删除 / 类型变更才递增 `schema_version`。高风险版本禁止裸 bump（原因见 [release](release.md) 护栏）。
 
-当前 `CURRENT_SCHEMA_VERSION = 4`：
+队列格式使用 schema 5，提供完整 v4→v5 迁移与单键读取适配器，保留触发、停止键、分组和启用状态。写入策略与版本号共同保护数据：管理目录为 `{app_data_dir}/profiles-sequences/`，首次使用只复制 `{app_data_dir}/profiles/` 中的 `.qzh`，保留源目录；`.legacy-imported` 标记避免以后重复制、复活已删除配置或覆盖新编辑。激活路径写 `sequenceActiveProfilePath`，首次读取可回落旧 `activeProfilePath`，不改旧键。旧版只访问旧目录和旧激活记录，无法把新队列误执行成单键；新导出内容版本更高且没有旧目标字段，旧读取器拒绝。两个目录的后续编辑不自动互相同步，配置交换使用导入／导出且接收方需支持队列。
+
+当前 `CURRENT_SCHEMA_VERSION = 5`：
 
 | schema_version | 变更                                                                        | 引入版本 |
 | -------------- | --------------------------------------------------------------------------- | -------- |
@@ -34,6 +36,7 @@
 | 2              | 按键字段裸 `u32` VK → `KeyId`（键盘 + 鼠标 5 键统一），可选字段 `null` 保留 | v0.2     |
 | 3              | `MouseButton` 新增 `WheelUp` / `WheelDown`                                  | v0.2.4   |
 | 4              | `BurstRule` 新增可选 `group` 字段（Toggle 互斥分组）                        | v0.2.5   |
+| 5              | 输出统一为 `steps`，完整迁移旧单键，独立配置目录保留回退数据 | Unreleased |
 
 不升版本的默认值字段：`meta.signature`（水印署名，空串即未设置）。它在反序列化时就经 `sanitize_signature` 去控制字符、去首尾空白、截到 16 字符，导入、列表、保存所有读路径一处收口。`save_profile` 一律沿用文件里的旧值（前端自动保存每次从头拼 `meta`、不带署名），只有 `set_profile_signature` 能改，且要求持有 `flair.signature` 权益。
 
@@ -46,7 +49,7 @@
 | 连发间隔（结构下限） | 1ms – 10000ms                         | `qzh-profile/src/profile.rs::validate()`（默认 10ms）                  |
 | 连发间隔（有效下限） | ≥ 10ms（`MIN_EFFECTIVE_INTERVAL_MS`） | 加载时 `Profile::clamp_intervals()` 钳位 + `burst-engine` 运行时 floor |
 | 单配置规则数         | ≤ 64                                  | `profile.rs::validate()`                                               |
-| 宏序列步骤数         | ≤ 256                                 | `macro_seq.rs::MAX_STEPS`                                              |
+| 规则输出步骤数       | 1～256                                | `profile.rs::MAX_OUTPUT_STEPS` 与规则结构校验 |
 
 约束在 `qzh-profile` 校验层执行，不依赖前端；按键合法性不在 `validate()` 里查，见 [key-policy](key-policy.md)。
 

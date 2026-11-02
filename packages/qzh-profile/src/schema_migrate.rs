@@ -20,6 +20,7 @@ fn migrate_step(data: Value, from_version: u32) -> Result<Value, MigrateError> {
         1 => migrate_v1_to_v2(data),
         2 => migrate_v2_to_v3(data),
         3 => migrate_v3_to_v4(data),
+        4 => migrate_v4_to_v5(data),
         v => Err(MigrateError::UnknownVersion(v)),
     }
 }
@@ -78,6 +79,28 @@ fn migrate_v2_to_v3(mut data: Value) -> Result<Value, MigrateError> {
 /// v3 → v4：BurstRule 新增可选 `group` 字段，旧数据无结构变更（`#[serde(default)]` 兜底），仅升版本号。
 fn migrate_v3_to_v4(mut data: Value) -> Result<Value, MigrateError> {
     data["schema_version"] = json!(4);
+    Ok(data)
+}
+
+fn migrate_v4_to_v5(mut data: Value) -> Result<Value, MigrateError> {
+    if let Some(rules) = data.get_mut("rules").and_then(Value::as_array_mut) {
+        for rule in rules {
+            let Some(fields) = rule.as_object_mut() else {
+                continue;
+            };
+            if !fields.contains_key("steps") {
+                if let Some((key, interval)) =
+                    fields.get("target_key").zip(fields.get("interval_ms"))
+                {
+                    let steps = json!([{ "key": key, "interval_ms": interval }]);
+                    fields.remove("target_key");
+                    fields.remove("interval_ms");
+                    fields.insert("steps".into(), steps);
+                }
+            }
+        }
+    }
+    data["schema_version"] = json!(5);
     Ok(data)
 }
 

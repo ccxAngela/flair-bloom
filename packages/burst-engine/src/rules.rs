@@ -12,7 +12,11 @@ pub struct RuleSnapshot {
 
 impl RuleSnapshot {
     pub fn new(rules: Vec<BurstRule>) -> Self {
-        let rules: Vec<_> = rules.into_iter().map(Arc::new).collect();
+        let rules: Vec<_> = rules
+            .into_iter()
+            .filter(|r| r.validate().is_ok())
+            .map(Arc::new)
+            .collect();
         let mut press_index: HashMap<KeyId, Vec<Arc<BurstRule>>> = HashMap::new();
         let mut hold_release_index: HashMap<KeyId, Vec<Arc<BurstRule>>> = HashMap::new();
 
@@ -78,10 +82,12 @@ mod tests {
             id: id.to_string(),
             enabled: true,
             trigger_key,
-            target_key,
+            steps: vec![qzh_profile::profile::OutputStep {
+                key: target_key,
+                interval_ms: 10,
+            }],
             mode,
             stop_key: None,
-            interval_ms: 10,
             group: None,
         }
     }

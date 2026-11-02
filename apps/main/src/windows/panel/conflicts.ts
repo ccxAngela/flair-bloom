@@ -1,3 +1,4 @@
+import { outputKeys, type OutputStep } from './outputSequence.ts';
 /**
  * 热键冲突检测。
  *
@@ -19,7 +20,7 @@ export interface BurstRule {
   id: string;
   enabled: boolean;
   trigger_key: KeyId;
-  target_key: KeyId;
+  steps: OutputStep[];
   mode: BurstMode;
 }
 
@@ -143,44 +144,46 @@ export function detectConflicts(rules: BurstRule[], hotkeys: Hotkeys): Conflict[
   // ── 4. 连发按键（target_key）== 另一条规则的触发键（warning）──────────────
   // 注入的 target_key 事件虽由 SIM_MARKER / PENDING_INJECTIONS 过滤，
   // 但 DD-HID 模式在极端情况下可能漏判，配置本身在概念上也令人困惑。
-  for (const ruleA of enabled) {
-    const cascading = enabled.filter(
-      (ruleB) => ruleB.id !== ruleA.id && keyEq(ruleA.target_key, ruleB.trigger_key),
-    );
-    if (cascading.length === 0) continue;
+  for (const original of enabled) {
+    for (const key of outputKeys(original)) {
+      const ruleA = { ...original, steps: [{ key, interval_ms: 10 }] };
+      const cascading = enabled.filter(
+        (ruleB) => ruleB.id !== ruleA.id && keyEq(ruleA.steps[0].key, ruleB.trigger_key),
+      );
+      if (cascading.length === 0) continue;
 
-    // 若该 key 已被更高优先级冲突覆盖，不重复报
-    const alreadyCovered = conflicts.some(
-      (c) =>
-        keyEq(c.key, ruleA.target_key) &&
-        c.participants.some((p) => p.kind === 'rule' && p.ruleId === ruleA.id),
-    );
-    if (alreadyCovered) continue;
+      // 若该 key 已被更高优先级冲突覆盖，不重复报
+      const alreadyCovered = conflicts.some(
+        (c) =>
+          keyEq(c.key, ruleA.steps[0].key) &&
+          c.participants.some((p) => p.kind === 'rule' && p.ruleId === ruleA.id),
+      );
+      if (alreadyCovered) continue;
 
-    conflicts.push({
-      id: `target-cascades-trigger-${ruleA.id}-${keyToken(ruleA.target_key)}`,
-      severity: 'warning',
-      key: ruleA.target_key,
-      message: `连发按键 ${keyLabel(ruleA.target_key)} 同时是另一条规则的触发键，注入时可能意外激活该规则`,
-      participants: [
-        {
-          kind: 'rule',
-          ruleId: ruleA.id,
-          ruleMode: ruleA.mode,
-          field: 'target_key',
-          label: '连发来源',
-        },
-        ...cascading.map((r) => ({
-          kind: 'rule' as const,
-          ruleId: r.id,
-          ruleMode: r.mode,
-          field: 'trigger_key' as const,
-          label: '被触发',
-        })),
-      ],
-    });
+      conflicts.push({
+        id: `target-cascades-trigger-${ruleA.id}-${keyToken(ruleA.steps[0].key)}`,
+        severity: 'warning',
+        key: ruleA.steps[0].key,
+        message: `连发按键 ${keyLabel(ruleA.steps[0].key)} 同时是另一条规则的触发键，注入时可能意外激活该规则`,
+        participants: [
+          {
+            kind: 'rule',
+            ruleId: ruleA.id,
+            ruleMode: ruleA.mode,
+            field: 'target_key',
+            label: '连发来源',
+          },
+          ...cascading.map((r) => ({
+            kind: 'rule' as const,
+            ruleId: r.id,
+            ruleMode: r.mode,
+            field: 'trigger_key' as const,
+            label: '被触发',
+          })),
+        ],
+      });
+    }
   }
-
   return conflicts;
 }
 

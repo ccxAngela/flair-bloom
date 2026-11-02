@@ -104,7 +104,7 @@ apps/site/                      # 产品页（独立 pnpm 项目，不在根 wor
 packages/crypto/src/            # aes.rs（AES-256-GCM）、license.rs（billing 许可证 JWS 验签）、kid.rs；build.rs 编入公钥列表
 packages/migrate/src/lib.rs     # run_migrations() 泛型迁移运行器
 packages/qzh-format/src/        # header.rs（FileHeader）、lib.rs（read_encrypted / write_encrypted）
-packages/qzh-profile/src/       # key_id.rs、profile.rs（Profile / BurstRule + validate）、key_policy.rs、macro_seq.rs、schema_migrate.rs、lib.rs
+packages/qzh-profile/src/       # key_id.rs、profile.rs（Profile / BurstRule / OutputStep + validate）、key_policy.rs、storage.rs、schema_migrate.rs、lib.rs
 packages/win-sysinfo/src/       # lib.rs（os_version / webview2_version / …）、registry.rs、prereq.rs（HVCI / SAC / 待重启 / Defender 排除）
 packages/win-input/src/         # lib.rs（InputMode / init_backend / dispatch / SIM_MARKER / PENDING_INJECTIONS）、ddsimple.rs / dd_common.rs、interception.rs
 packages/burst-engine/src/      # BurstEngine + start_listener（LL 钩子 + 消息循环）

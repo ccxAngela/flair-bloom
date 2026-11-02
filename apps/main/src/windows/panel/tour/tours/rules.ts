@@ -8,7 +8,7 @@ function hasHoldRule(snapshot: TourSnapshot): boolean {
 export const rules: TourDef = {
   id: 'rules',
   title: '规则玩法',
-  summary: '筛选、规则卡、换模式、高级设置',
+  summary: '筛选、规则卡、按键队列与录制、高级设置',
   steps: [
     {
       id: 'filter',
@@ -59,6 +59,22 @@ export const rules: TourDef = {
       body: p(
         '卡片左上角的「长按 / 切换」标签点一下就换成另一种，不用删了重建。',
         '右上角的下拉箭头里还有移入分组、删除。',
+      ),
+      prepare: (host) => {
+        host.setFilter('hold');
+        return hasHoldRule(host.snapshot) ? undefined : 'skip';
+      },
+    },
+    {
+      id: 'queue',
+      target: 'rule-latest',
+      title: '单键也是一步队列',
+      body: p(
+        '每条规则能输出一份按键队列，每步有自己的间隔；长按／切换仍决定什么时候运行。',
+        '「添加步骤／录制队列」里可以编辑、排序、录制和试播；保存成功才关闭编辑器，失败时保留草稿，取消保留原内容。',
+        '录制支持普通键盘点按，倒计时 3 秒后开始。全局停止热键在全局关闭时也能结束录制；结束后先预览、设置末步到首步的间隔，再采用并保存。',
+        '正常停止后从头开始；同组临时插队会保留步骤和剩余等待，发送失败的队列不会自动重放。',
+        '停止或保存后仍按住的键需松开再触发。释放失败时同键队列等候重试；若提示输出线程异常，请重启应用。',
       ),
       prepare: (host) => {
         host.setFilter('hold');

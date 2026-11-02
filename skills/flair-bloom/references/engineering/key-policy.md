@@ -2,11 +2,11 @@
 
 ## `KeyId`
 
-按键标识是 tagged union，前后端共享 wire format `{kind:"keyboard",code:81}` / `{kind:"mouse",code:"left"}`。`MouseButton` 含 `Left/Right/Middle/X1/X2` + `WheelUp/WheelDown`（滚轮，瞬发）。所有连发规则字段（`trigger_key` / `target_key` / `stop_key`）与全局热键字段（`global_toggle` / `global_stop` / `panel_toggle`）都用 `KeyId`，`PENDING_INJECTIONS` 注入事件队列也以 `(KeyId, is_up)` 为键。定义在 `packages/qzh-profile/src/key_id.rs`，前端镜像在 `components/KeyCapture.tsx`。
+按键标识是 tagged union，前后端共享 wire format `{kind:"keyboard",code:81}` / `{kind:"mouse",code:"left"}`。`MouseButton` 含 `Left/Right/Middle/X1/X2` + `WheelUp/WheelDown`（滚轮，瞬发）。规则的 `trigger_key`、`steps[].key`、`stop_key` 与三个全局热键都使用单个 `KeyId`，没有组合键绑定。`PENDING_INJECTIONS` 注入事件队列也以 `(KeyId, is_up)` 为键。定义在 `packages/qzh-profile/src/key_id.rs`，前端镜像在 `components/KeyCapture.tsx`。
 
 ## 角色模型（唯一事实源：`packages/qzh-profile/src/key_policy.rs`）
 
-系统里的按键只有两种角色。**读**角色只被低级钩子观察、永不注入（三个全局热键、规则的 `trigger_key` 与 `stop_key`）；**写**角色只经 `win_input::dispatch` 注入、不参与触发判定（`target_key`）。驱动支持只对写角色有意义——侧键在 DDSimple 下能注入，但读角色本来就不受注入能力影响。
+系统里的按键只有两种角色。**读**角色只被低级钩子观察、永不注入（三个全局热键、规则的 `trigger_key` 与 `stop_key`）；**写**角色经统一输入通道注入、不参与触发判定（每个 `steps[].key`）。校验与净化遍历整条队列的去重按键集合，重合关系检查任一步，不只看首步。驱动支持只对写角色有意义。
 
 一个槽位可能同时承担两种角色（默认模式与横版单键模型的连发按键，`trigger == target`），此时受两套约束的**交集**。方向与权限模型的 `rw` 相反：权限枚举「被授予的动作」，角色越多动作越多故取并集；这里枚举「够格的按键」，角色越多要求越多故取交集。`KeySlot` 的五个变体就是这个模型：`Hotkey` / `Trigger` / `Target` / `TriggerTarget` / `TriggerTargetToggle`。重合态按规则模式再分一层，因为切换连发对自注入过滤的要求比长按高。
 

@@ -1,3 +1,4 @@
+import { outputKeys, type OutputStep } from './outputSequence.ts';
 import type { KeyId } from './components/KeyCapture';
 // 带扩展名：scripts/hkb-wires.test.ts 用 Node 类型剥离直接跑本文件，无扩展名的相对导入会报
 // ERR_MODULE_NOT_FOUND；Vite 与 tsc（allowImportingTsExtensions）都认这种写法。
@@ -10,7 +11,7 @@ export interface WireRule {
   id: string;
   enabled: boolean;
   trigger_key: KeyId;
-  target_key: KeyId;
+  steps: OutputStep[];
   mode: BurstMode;
   stop_key: KeyId | null;
 }
@@ -38,8 +39,10 @@ export function buildWires(rules: WireRule[]): Wire[] {
   for (const r of rules) {
     const from = keyToken(r.trigger_key);
     const base = { ruleId: r.id, from, mode: r.mode, enabled: r.enabled };
-    const target = keyToken(r.target_key);
-    if (target !== from) wires.push({ ...base, to: target, kind: 'target' });
+    for (const key of outputKeys(r)) {
+      const target = keyToken(key);
+      if (target !== from) wires.push({ ...base, to: target, kind: 'target' });
+    }
     if (r.mode === 'toggle' && r.stop_key) {
       const stop = keyToken(r.stop_key);
       if (stop !== from) wires.push({ ...base, to: stop, kind: 'stop' });
@@ -345,7 +348,7 @@ export function placeWires(
     const fromHover = routes.get(leg) ?? [];
     const points = leg.dir === 'out' ? fromHover : [...fromHover].reverse();
     return {
-      id: `${leg.dir}-${leg.wire.ruleId}-${leg.wire.kind}`,
+      id: `${leg.dir}-${leg.wire.ruleId}-${leg.wire.kind}-${leg.wire.to}`,
       d: chamferPath(points),
       points,
       start: points[0],

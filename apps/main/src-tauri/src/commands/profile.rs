@@ -25,13 +25,15 @@ pub const DEFAULT_PROFILE_NAME: &str = "defaults";
 pub const LEGACY_DEFAULT_PROFILE_NAME: &str = "defults";
 
 /// store 中存储「当前激活配置文件绝对路径」的键名。
-pub const ACTIVE_PATH_KEY: &str = "activeProfilePath";
+pub const ACTIVE_PATH_KEY: &str = "sequenceActiveProfilePath";
 
 pub(crate) fn profiles_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
+    let base = app
+        .path()
         .app_data_dir()
-        .map(|p| p.join("profiles"))
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))
+        .map_err(|e| format!("无法获取应用数据目录: {e}"))?;
+    qzh_profile::storage::prepare_profile_directory(&base)
+        .map_err(|e| format!("准备队列配置目录失败: {e}"))
 }
 
 pub(crate) fn now_secs() -> u64 {
@@ -342,20 +344,24 @@ fn factory_default_rules() -> Vec<BurstRule> {
             id: make_id(),
             enabled: false,
             trigger_key: KeyId::Keyboard(0x51), // Q
-            target_key: KeyId::Keyboard(0x51),
+            steps: vec![qzh_profile::OutputStep {
+                key: KeyId::Keyboard(0x51),
+                interval_ms: DEFAULT_INTERVAL_MS,
+            }],
             mode: BurstMode::Hold,
             stop_key: None,
-            interval_ms: DEFAULT_INTERVAL_MS,
             group: None,
         },
         BurstRule {
             id: make_id(),
             enabled: false,
             trigger_key: KeyId::Keyboard(0x46), // F
-            target_key: KeyId::Keyboard(0x46),
+            steps: vec![qzh_profile::OutputStep {
+                key: KeyId::Keyboard(0x46),
+                interval_ms: DEFAULT_INTERVAL_MS,
+            }],
             mode: BurstMode::Toggle,
             stop_key: None,
-            interval_ms: DEFAULT_INTERVAL_MS,
             group: None,
         },
     ]

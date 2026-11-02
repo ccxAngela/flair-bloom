@@ -44,3 +44,5 @@ Thumbs.db
 
 # 真机验证时 Playwright MCP 落的控制台日志与快照
 .playwright-mcp/
+.playwright-cli/
+/output/playwright/

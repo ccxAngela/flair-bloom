@@ -30,6 +30,7 @@ fn states(running: &[&str], paused: &[&str]) -> RuleStates {
     RuleStates {
         running: running.iter().map(|s| s.to_string()).collect(),
         paused: paused.iter().map(|s| s.to_string()).collect(),
+        error: None,
     }
 }
 
@@ -57,13 +58,13 @@ fn group_hold_press_pauses_running_toggle_then_release_resumes_it() {
     rec.clear();
 
     engine.on_key_press(KEY_H);
-    assert_eq!(rec.take(), vec!["stop:a:g1", "start:h:g1"]);
+    assert_eq!(rec.take(), vec!["pause:a:g1", "start:h:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["h"], &["a"]));
     // 暂停的规则仍算活跃，界面不会把让位显示成已关闭。
     assert_eq!(engine.get_active_ids(), vec!["a", "h"]);
 
     engine.on_key_release(KEY_H);
-    assert_eq!(rec.take(), vec!["stop:h:g1", "start:a:g1"]);
+    assert_eq!(rec.take(), vec!["stop:h:g1", "resume:a:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["a"], &[]));
 }
 
@@ -81,16 +82,16 @@ fn nested_holds_run_latest_and_hand_back_in_reverse_order() {
     engine.on_key_press(KEY_H2);
     assert_eq!(
         rec.take(),
-        vec!["stop:a:g1", "start:h1:g1", "stop:h1:g1", "start:h2:g1"]
+        vec!["pause:a:g1", "start:h1:g1", "pause:h1:g1", "start:h2:g1"]
     );
     assert_eq!(engine.get_rule_states(), states(&["h2"], &["a", "h1"]));
 
     engine.on_key_release(KEY_H2);
-    assert_eq!(rec.take(), vec!["stop:h2:g1", "start:h1:g1"]);
+    assert_eq!(rec.take(), vec!["stop:h2:g1", "resume:h1:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["h1"], &["a"]));
 
     engine.on_key_release(KEY_H);
-    assert_eq!(rec.take(), vec!["stop:h1:g1", "start:a:g1"]);
+    assert_eq!(rec.take(), vec!["stop:h1:g1", "resume:a:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["a"], &[]));
 }
 
@@ -107,16 +108,16 @@ fn releasing_middle_of_stack_only_pops_it_without_touching_top() {
     rec.clear();
 
     engine.on_key_release(KEY_H);
-    assert!(rec.take().is_empty());
+    assert_eq!(rec.take(), vec!["stop:h1:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["h2"], &["a"]));
 
     engine.on_key_release(KEY_H2);
-    assert_eq!(rec.take(), vec!["stop:h2:g1", "start:a:g1"]);
+    assert_eq!(rec.take(), vec!["stop:h2:g1", "resume:a:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["a"], &[]));
 }
 
 #[test]
-fn pressing_paused_toggle_key_removes_it_without_stop_and_it_does_not_resume() {
+fn pressing_paused_toggle_key_discards_snapshot_and_does_not_resume() {
     // 默认配置下停止键即启动键：暂停期间再按一次切换键就是「停止」。
     let (engine, rec) = setup(vec![toggle("a", KEY_A, "g"), hold("h", KEY_H, "g")]);
     tap(&engine, KEY_A);
@@ -124,7 +125,7 @@ fn pressing_paused_toggle_key_removes_it_without_stop_and_it_does_not_resume() {
     rec.clear();
 
     tap(&engine, KEY_A);
-    assert!(rec.take().is_empty());
+    assert_eq!(rec.take(), vec!["stop:a:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["h"], &[]));
 
     engine.on_key_release(KEY_H);
@@ -133,7 +134,7 @@ fn pressing_paused_toggle_key_removes_it_without_stop_and_it_does_not_resume() {
 }
 
 #[test]
-fn separate_stop_key_on_paused_toggle_removes_it_without_stop() {
+fn separate_stop_key_on_paused_toggle_discards_snapshot() {
     let mut a = toggle("a", KEY_A, "g");
     a.stop_key = Some(KEY_STOP);
     let (engine, rec) = setup(vec![a, hold("h", KEY_H, "g")]);
@@ -142,7 +143,7 @@ fn separate_stop_key_on_paused_toggle_removes_it_without_stop() {
     rec.clear();
 
     tap(&engine, KEY_STOP);
-    assert!(rec.take().is_empty());
+    assert_eq!(rec.take(), vec!["stop:a:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["h"], &[]));
 
     engine.on_key_release(KEY_H);
@@ -160,9 +161,9 @@ fn toggle_replacement_during_hold_keeps_new_rule_paused_until_release() {
     engine.on_key_press(KEY_H);
     rec.clear();
 
-    // a 已暂停不发 stop；按住的 h 不被挤掉，b 只成为恢复目标、不发 start。
+    // 旧快照必须清理；按住的 h 不被挤掉，b 只成为恢复目标。
     tap(&engine, KEY_B);
-    assert!(rec.take().is_empty());
+    assert_eq!(rec.take(), vec!["stop:a:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["h"], &["b"]));
 
     engine.on_key_release(KEY_H);
@@ -255,7 +256,7 @@ fn repeated_hold_down_does_not_push_twice() {
     rec.clear();
 
     engine.on_key_release(KEY_H);
-    assert_eq!(rec.take(), vec!["stop:h:g1", "start:a:g1"]);
+    assert_eq!(rec.take(), vec!["stop:h:g1", "resume:a:g1"]);
     assert_eq!(engine.get_rule_states(), states(&["a"], &[]));
 }
 
@@ -268,8 +269,8 @@ fn assert_stack_cleared_by(reset: impl Fn(&crate::BurstEngine)) {
     assert_eq!(engine.get_rule_states(), RuleStates::default());
     rec.clear();
 
-    // 复位清了物理账本：松开旧 h 被当作未按下而早返回，不会误出栈或恢复。
-    assert!(!engine.on_key_release_event(KEY_H).accepted_physical);
+    // 停止只清运行态，松开真实按着的旧键不应恢复已经作废的组内快照。
+    assert!(engine.on_key_release_event(KEY_H).accepted_physical);
     assert!(rec.take().is_empty());
 
     // 栈已清空：再按组内切换正常启动，不会被残留栈当成插队中而保持暂停。
@@ -289,7 +290,7 @@ fn global_disable_clears_stack_and_pause_state() {
 #[test]
 fn backend_switch_clears_stack_and_pause_state() {
     assert_stack_cleared_by(|engine| {
-        engine.begin_backend_switch();
+        engine.begin_backend_switch().unwrap();
         engine.end_backend_switch();
     });
 }
@@ -336,6 +337,15 @@ struct GatedScheduler {
 }
 
 impl crate::scheduler::Scheduler for GatedScheduler {
+    fn resume_rule(&self, rule_id: String, _generation: u64) {
+        self.cmds.lock().unwrap().push(format!("resume:{rule_id}"));
+    }
+    fn play_once(&self, rule: std::sync::Arc<BurstRule>, generation: u64) {
+        self.start_rule(rule, generation);
+    }
+    fn pause_rule(&self, rule_id: String, generation: u64) {
+        self.stop_rule(rule_id, generation);
+    }
     fn start_rule(&self, rule: std::sync::Arc<BurstRule>, _generation: u64) {
         self.cmds.lock().unwrap().push(format!("start:{}", rule.id));
     }

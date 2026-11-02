@@ -182,14 +182,16 @@ fn make_rules(config: &StressConfig) -> Vec<Arc<BurstRule>> {
                 id: format!("stress-{i}"),
                 enabled: true,
                 trigger_key: KeyId::Keyboard(0x1000 + i as u32),
-                target_key: if config.same_target {
-                    KeyId::Keyboard(0x2000)
-                } else {
-                    KeyId::Keyboard(0x2000 + i as u32)
-                },
+                steps: vec![qzh_profile::profile::OutputStep {
+                    key: if config.same_target {
+                        KeyId::Keyboard(0x2000)
+                    } else {
+                        KeyId::Keyboard(0x2000 + i as u32)
+                    },
+                    interval_ms: config.interval_ms,
+                }],
                 mode: BurstMode::Toggle,
                 stop_key: None,
-                interval_ms: config.interval_ms,
                 group: None,
             })
         })

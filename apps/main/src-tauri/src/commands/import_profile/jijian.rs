@@ -115,10 +115,12 @@ pub(super) fn parse_rules(data: &str) -> Vec<BurstRule> {
             id: make_id(),
             enabled: false,
             trigger_key: key,
-            target_key: key,
+            steps: vec![qzh_profile::profile::OutputStep {
+                key,
+                interval_ms: interval,
+            }],
             mode: BurstMode::Hold,
             stop_key: None,
-            interval_ms: interval,
             group: None,
         })
         .collect()
@@ -145,7 +147,7 @@ pub(super) fn parse_preview(data: &str, name: &str) -> ImportPreview {
         .map(|v| v.split(',').filter(|s| !s.trim().is_empty()).count())
         .unwrap_or(0);
     let hotkeys = parse_hotkeys(data);
-    let interval = rules.first().map(|r| r.interval_ms).unwrap_or(0);
+    let interval = rules.first().map(|r| r.steps[0].interval_ms).unwrap_or(0);
     ImportPreview { source_app: "极简按键".into(), suggested_name: name.into(), rule_count: rules.len(), skipped_count: count.saturating_sub(rules.len()), interval_ms: interval, interval_max_ms: interval,
         warnings: vec!["此格式为顺序循环配置，按键列表迁移为默认停用的同键长按规则；导入后请确认触发方式、间隔并自行启用，不能复现原自动顺序执行。".into(), "迁移启动／停止键，不导入暂停键、声音、驱动、协议记录；NUM0～NUM9 是原格式的主键区数字键。".into()],
         global_toggle: hotkeys.global_toggle, global_stop: hotkeys.global_stop, panel_toggle: None }
@@ -160,7 +162,7 @@ mod tests {
         assert!(detect(data));
         let rules = parse_rules(data);
         assert_eq!(rules.len(), 2);
-        assert_eq!(rules[1].target_key, KeyId::Keyboard(51));
+        assert_eq!(rules[1].steps[0].key, KeyId::Keyboard(51));
         assert!(rules.iter().all(|r| !r.enabled));
         assert_eq!(
             parse_hotkeys(data).global_toggle,

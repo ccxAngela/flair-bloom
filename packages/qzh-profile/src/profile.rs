@@ -16,7 +16,7 @@ use crate::key_id::KeyId;
 /// - v2：按键字段改为 [`KeyId`]，支持键盘 + 鼠标 5 键。
 /// - v3：MouseButton 新增 WheelUp / WheelDown，旧文件向后兼容（新字段有默认值不涉及结构变更）。
 /// - v4：BurstRule 新增可选 `group` 字段，用于 Toggle 规则互斥分组；旧文件向后兼容。
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 /// 单个 [`Profile`] 允许的最大规则数量，超出会在 [`Profile::validate`] 阶段被拒绝。
 pub const MAX_RULES: usize = 64;
 /// 数据结构上的绝对下限。`validate` 据此判定结构合法性，不收紧到 [`MIN_EFFECTIVE_INTERVAL_MS`]，
@@ -98,8 +98,21 @@ fn deserialize_signature<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Strin
     Option::<String>::deserialize(d).map(|s| sanitize_signature(s.as_deref().unwrap_or_default()))
 }
 
-/// 单条连发规则：把 `trigger_key` 触发的事件转换为针对 `target_key` 的连发输出。
+/// 每条规则允许的最大输出步骤数。
+pub const MAX_OUTPUT_STEPS: usize = 256;
+
+/// 一个完整点按及其到下一步起拍的间隔。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputStep {
+    /// 输出的单个按键。
+    pub key: KeyId,
+    /// 到下一步起拍的间隔，包含本次点按时长。
+    pub interval_ms: u32,
+}
+
+/// 单条规则：触发模式决定何时运行，步骤列表决定输出顺序。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "RuleWire")]
 pub struct BurstRule {
     /// 规则在配置文件内的稳定唯一 ID。
     pub id: String,
@@ -107,19 +120,78 @@ pub struct BurstRule {
     pub enabled: bool,
     /// 触发键（物理按下时启动连发）。
     pub trigger_key: KeyId,
-    /// 连发实际输出到游戏的目标键。
-    pub target_key: KeyId,
+    /// 非空输出队列；末步结束后循环回首步。
+    pub steps: Vec<OutputStep>,
     /// 触发模式：[`BurstMode::Hold`] 或 [`BurstMode::Toggle`]。
     pub mode: BurstMode,
     /// 仅 Toggle 模式：独立停止热键。为 `None` 时回退为 `trigger_key`。
     #[serde(default)]
     pub stop_key: Option<KeyId>,
-    /// 每次模拟按键之间的间隔毫秒数。钳进 \[[`MIN_INTERVAL_MS`], [`MAX_INTERVAL_MS`]\]。
-    pub interval_ms: u32,
     /// Toggle 规则互斥分组名。同组内激活一条规则时，其他活跃的同组 Toggle 规则自动停止。
     /// Hold 规则忽略此字段。`None` 表示不属于任何分组。
     #[serde(default)]
     pub group: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RuleWire {
+    id: String,
+    enabled: bool,
+    trigger_key: KeyId,
+    mode: BurstMode,
+    #[serde(default)]
+    stop_key: Option<KeyId>,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    steps: Option<Vec<OutputStep>>,
+    #[serde(default)]
+    target_key: Option<KeyId>,
+    #[serde(default)]
+    interval_ms: Option<u32>,
+}
+
+impl TryFrom<RuleWire> for BurstRule {
+    type Error = &'static str;
+
+    fn try_from(wire: RuleWire) -> Result<Self, Self::Error> {
+        let steps = match (wire.steps, wire.target_key, wire.interval_ms) {
+            (Some(steps), None, None) => steps,
+            (None, Some(key), Some(interval_ms)) => vec![OutputStep { key, interval_ms }],
+            _ => return Err("输出队列与旧单键字段缺失或混用"),
+        };
+        let rule = Self {
+            id: wire.id,
+            enabled: wire.enabled,
+            trigger_key: wire.trigger_key,
+            mode: wire.mode,
+            stop_key: wire.stop_key,
+            group: wire.group,
+            steps,
+        };
+        if rule.steps.is_empty() || rule.steps.len() > MAX_OUTPUT_STEPS {
+            return Err("输出队列的步骤数不合法");
+        }
+        Ok(rule)
+    }
+}
+
+impl BurstRule {
+    /// 校验队列结构；按键能力由 key_policy 统一检查。
+    pub fn validate(&self) -> Result<(), ProfileError> {
+        if self.steps.is_empty() || self.steps.len() > MAX_OUTPUT_STEPS {
+            return Err(ProfileError::InvalidStepCount(self.steps.len()));
+        }
+        if self.steps.len() > 1 && self.mode == BurstMode::Hold && self.trigger_key.is_wheel() {
+            return Err(ProfileError::WheelSequence);
+        }
+        for step in &self.steps {
+            if !(MIN_INTERVAL_MS..=MAX_INTERVAL_MS).contains(&step.interval_ms) {
+                return Err(ProfileError::InvalidInterval(step.interval_ms));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// 连发触发模式。
@@ -163,6 +235,12 @@ fn default_log_level() -> String {
 /// [`Profile::validate`] / 解析 `.qzh` 时返回的错误集合。
 #[derive(Debug, Error)]
 pub enum ProfileError {
+    /// 队列必须包含一至 MAX_OUTPUT_STEPS 个步骤。
+    #[error("输出步骤数 {0} 超出允许范围")]
+    InvalidStepCount(usize),
+    /// 滚轮 Hold 只支持一步点按。
+    #[error("滚轮长按触发只支持一步输出")]
+    WheelSequence,
     /// 规则数量超过 [`MAX_RULES`]。
     #[error("rule count exceeds maximum of {MAX_RULES}")]
     TooManyRules,
@@ -195,9 +273,11 @@ impl Profile {
     /// 详见 [`MIN_EFFECTIVE_INTERVAL_MS`]），而非拒绝加载。
     pub fn clamp_intervals(&mut self) {
         for rule in &mut self.rules {
-            rule.interval_ms = rule
-                .interval_ms
-                .clamp(MIN_EFFECTIVE_INTERVAL_MS, MAX_INTERVAL_MS);
+            for step in &mut rule.steps {
+                step.interval_ms = step
+                    .interval_ms
+                    .clamp(MIN_EFFECTIVE_INTERVAL_MS, MAX_INTERVAL_MS);
+            }
         }
     }
 
@@ -212,10 +292,7 @@ impl Profile {
             return Err(ProfileError::TooManyRules);
         }
         for rule in &self.rules {
-            let i = rule.interval_ms;
-            if !(MIN_INTERVAL_MS..=MAX_INTERVAL_MS).contains(&i) {
-                return Err(ProfileError::InvalidInterval(i));
-            }
+            rule.validate()?;
         }
         Ok(())
     }

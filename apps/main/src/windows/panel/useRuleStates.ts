@@ -5,12 +5,27 @@ import { useEffect, useState } from 'react';
 interface RuleStates {
   running: string[];
   paused: string[];
+  progress: RuleProgress[];
+  error?: string;
+}
+
+export interface RuleProgress {
+  rule_id: string;
+  step_index: number;
+  step_count: number;
+  completed_cycles: number;
+  paused: boolean;
+  error?: string;
+  lateness_ms: number;
+  max_lateness_ms: number;
 }
 
 export interface RuleStateSets {
   /** running ∪ paused：暂停 / 恢复不改变集合，界面仍显示为已开启。 */
   active: Set<string>;
   paused: Set<string>;
+  progress: Record<string, RuleProgress>;
+  error?: string;
 }
 
 const EMPTY = new Set<string>();
@@ -26,31 +41,37 @@ function sameMembers(prev: Set<string>, ids: string[]): boolean {
 export function useRuleStates(enabled: boolean, intervalMs: number): RuleStateSets {
   const [active, setActive] = useState<Set<string>>(EMPTY);
   const [paused, setPaused] = useState<Set<string>>(EMPTY);
+  const [progress, setProgress] = useState<Record<string, RuleProgress>>({});
+  const [error, setError] = useState<string>();
 
   useEffect(() => {
     if (!enabled) {
       setActive((prev) => (prev.size === 0 ? prev : EMPTY));
       setPaused((prev) => (prev.size === 0 ? prev : EMPTY));
-      return;
+      setProgress((prev) => (Object.keys(prev).length ? {} : prev));
     }
     let cancelled = false;
     const poll = () => {
       invoke<RuleStates>('get_rule_states')
-        .then(({ running, paused: pausedIds }) => {
+        .then(({ running, paused: pausedIds, progress: positions, error: failure }) => {
           if (cancelled) return;
-          const ids = [...running, ...pausedIds];
+          const ids = enabled ? [...running, ...pausedIds] : [];
           setActive((prev) => (sameMembers(prev, ids) ? prev : new Set(ids)));
-          setPaused((prev) => (sameMembers(prev, pausedIds) ? prev : new Set(pausedIds)));
+          const nextPaused = enabled ? pausedIds : [];
+          setPaused((prev) => (sameMembers(prev, nextPaused) ? prev : new Set(nextPaused)));
+          const next = Object.fromEntries(positions.map((p) => [p.rule_id, p]));
+          setProgress((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+          setError(failure ?? undefined);
         })
         .catch(() => {});
     };
     poll();
-    const timer = setInterval(poll, intervalMs);
+    const timer = enabled ? setInterval(poll, intervalMs) : undefined;
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
   }, [enabled, intervalMs]);
 
-  return { active, paused };
+  return { active, paused, progress, error };
 }

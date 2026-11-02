@@ -63,13 +63,14 @@ pub async fn install_driver(app: AppHandle) -> Result<(), String> {
         if let Err(ref e) = result {
             tracing::error!("Interception 驱动安装失败：{e}");
         }
-        if result.is_ok() {
+        let result = result.and_then(|()| {
             crate::commands::engine::switch_input_backend(
                 &app,
                 &app.state::<crate::commands::engine::EngineState>().0,
                 win_input::InputMode::SendInput,
-            );
-        }
+            )
+            .map_err(|error| format!("驱动已安装，但输入模式切换未完成：{error}"))
+        });
         crate::commands::status::emit_status_changed(&app);
         result
     }
@@ -89,7 +90,7 @@ pub async fn uninstall_driver(app: AppHandle) -> Result<(), String> {
         crate::commands::engine::leave_driver_backend(
             &app,
             &app.state::<crate::commands::engine::EngineState>().0,
-        );
+        )?;
         let res_dir = resource_dir(&app)?;
         let result = win_driver::interception::uninstall(&res_dir).await;
         if let Err(ref e) = result {
@@ -120,7 +121,7 @@ pub async fn uninstall_dd_hid_driver(app: AppHandle) -> Result<UninstallOutcome,
         crate::commands::engine::leave_driver_backend(
             &app,
             &app.state::<crate::commands::engine::EngineState>().0,
-        );
+        )?;
         let res_dir = resource_dir(&app)?;
         let (pending_reboot, exe_result) = win_driver::dd_hid::uninstall(&res_dir).await?;
         crate::commands::status::emit_status_changed(&app);

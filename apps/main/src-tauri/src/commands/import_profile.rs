@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager, State};
 
 use qzh_profile::{
     Advanced, BurstMode, BurstRule, Hotkeys, KeyId, MouseButton, Profile, ProfileMeta,
-    CURRENT_SCHEMA_VERSION, MAX_INTERVAL_MS, MAX_RULES, MIN_EFFECTIVE_INTERVAL_MS, MIN_INTERVAL_MS,
+    CURRENT_SCHEMA_VERSION, MAX_INTERVAL_MS, MAX_RULES, MIN_EFFECTIVE_INTERVAL_MS,
 };
 
 use super::engine::EngineState;
@@ -246,10 +246,12 @@ fn gaibang_parse_rules(data: &str) -> Vec<BurstRule> {
             id: make_id(),
             enabled: true,
             trigger_key: vk_to_key_id(vk),
-            target_key: vk_to_key_id(vk),
+            steps: vec![qzh_profile::profile::OutputStep {
+                key: vk_to_key_id(vk),
+                interval_ms,
+            }],
             mode: BurstMode::Hold,
             stop_key: None,
-            interval_ms,
             group: None,
         })
         .collect()
@@ -527,15 +529,8 @@ fn convert_profile(p: &Path, source_profile_index: Option<usize>) -> Result<Prof
         return Err(format!("规则数量 {} 超过上限 {MAX_RULES}", rules.len()));
     }
     for (i, rule) in rules.iter().enumerate() {
-        if !(MIN_INTERVAL_MS..=MAX_INTERVAL_MS).contains(&rule.interval_ms) {
-            return Err(format!(
-                "第 {} 条规则间隔 {}ms 超出范围 [{}, {}]",
-                i + 1,
-                rule.interval_ms,
-                MIN_INTERVAL_MS,
-                MAX_INTERVAL_MS
-            ));
-        }
+        rule.validate()
+            .map_err(|error| format!("第 {} 条规则：{error}", i + 1))?;
     }
 
     let hotkeys = (parser.parse_hotkeys)(&data);
@@ -634,10 +629,12 @@ mod tests {
                 id: "native-rule".into(),
                 enabled: false,
                 trigger_key: KeyId::Keyboard(65),
-                target_key: KeyId::Keyboard(66),
+                steps: vec![qzh_profile::profile::OutputStep {
+                    key: KeyId::Keyboard(66),
+                    interval_ms: 50,
+                }],
                 mode: BurstMode::Toggle,
                 stop_key: Some(KeyId::Keyboard(67)),
-                interval_ms: 50,
                 group: Some("互斥组".into()),
             }],
             hotkeys: Hotkeys {

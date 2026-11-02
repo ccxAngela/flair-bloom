@@ -717,8 +717,8 @@ fn diagnose_hidstick() -> Vec<DiagnosticItem> {
 
 fn diagnose_profiles(app: &AppHandle) -> Vec<DiagnosticItem> {
     let mut out = Vec::new();
-    let profiles_dir = match app.path().app_data_dir() {
-        Ok(d) => d.join("profiles"),
+    let profiles_dir = match super::profile::profiles_dir(app) {
+        Ok(d) => d,
         Err(_) => return out,
     };
     if !profiles_dir.exists() {
@@ -886,7 +886,7 @@ async fn run_dd_hid_repair(app: AppHandle) -> Result<RepairOutcome, String> {
     crate::commands::engine::leave_driver_backend(
         &app,
         &app.state::<crate::commands::engine::EngineState>().0,
-    );
+    )?;
 
     let backup = ensure_backup_dir(&app)?;
     let oem_inf = win_driver::dd_hid::find_dd_hid_oem_inf();
@@ -1183,11 +1183,7 @@ async fn run_interception_repair(app: AppHandle) -> Result<RepairOutcome, String
 
 #[tauri::command]
 pub async fn repair_corrupted_profiles(app: AppHandle) -> Result<RepairOutcome, String> {
-    let profiles_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))?
-        .join("profiles");
+    let profiles_dir = super::profile::profiles_dir(&app)?;
     if !profiles_dir.exists() {
         return Ok(RepairOutcome {
             success: true,

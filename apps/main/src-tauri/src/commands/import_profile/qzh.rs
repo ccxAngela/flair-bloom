@@ -25,13 +25,13 @@ pub(super) fn preview(path: &Path) -> Result<ImportPreview, String> {
         interval_ms: profile
             .rules
             .iter()
-            .map(|r| r.interval_ms)
+            .flat_map(|r| r.steps.iter().map(|step| step.interval_ms))
             .min()
             .unwrap_or(DEFAULT_INTERVAL_MS),
         interval_max_ms: profile
             .rules
             .iter()
-            .map(|r| r.interval_ms)
+            .flat_map(|r| r.steps.iter().map(|step| step.interval_ms))
             .max()
             .unwrap_or(DEFAULT_INTERVAL_MS),
         warnings: Vec::new(),

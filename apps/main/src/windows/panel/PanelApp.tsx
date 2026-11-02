@@ -1,3 +1,4 @@
+import { isSimpleRule, outputKeys, type OutputStep } from './outputSequence.ts';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
@@ -290,10 +291,9 @@ interface BurstRule {
   id: string;
   enabled: boolean;
   trigger_key: KeyId;
-  target_key: KeyId;
+  steps: OutputStep[];
   mode: BurstMode;
   stop_key: KeyId | null;
-  interval_ms: number;
   group: string | null;
 }
 
@@ -343,10 +343,10 @@ function newRule(mode: BurstMode = 'hold'): BurstRule {
     id: crypto.randomUUID(),
     enabled: !isHold,
     trigger_key: keyboardKey(triggerVk),
-    target_key: keyboardKey(targetVk),
+    steps: [{ key: keyboardKey(targetVk), interval_ms: DEFAULT_INTERVAL_MS }],
     mode,
     stop_key: null,
-    interval_ms: DEFAULT_INTERVAL_MS,
+
     group: null,
   };
 }
@@ -361,10 +361,10 @@ function newSingleKeyRule(key: KeyId, mode: BurstMode, interval: number): BurstR
     id: crypto.randomUUID(),
     enabled: true,
     trigger_key: key,
-    target_key: key,
+    steps: [{ key: key, interval_ms: interval }],
     mode,
     stop_key: mode === 'toggle' ? key : null,
-    interval_ms: interval,
+
     group: null,
   };
 }
@@ -515,7 +515,15 @@ export default function PanelApp() {
   const rulesRef = useRef(rules);
   const profileAdvancedRef = useRef<Profile['advanced']>({ log_level: 'info' });
   // 全局开关启用时轮询，驱动激活态光晕；关闭时清空，避免残留高亮。
-  const { active: activeRuleIds, paused: pausedRuleIds } = useRuleStates(globalEnabled, 120);
+  const {
+    active: activeRuleIds,
+    paused: pausedRuleIds,
+    progress: ruleProgress,
+    error: outputError,
+  } = useRuleStates(globalEnabled, 120);
+  useEffect(() => {
+    if (outputError) toast.error(outputError);
+  }, [outputError]);
   const [profileName, setProfileName] = useState('defaults');
   const [profileList, setProfileList] = useState<ProfileEntry[]>([]);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -1184,7 +1192,7 @@ export default function PanelApp() {
 
   function saveProfile(ticket: ProfileWriteTicket) {
     profilePersistence.schedule(ticket, {
-      schema_version: 4,
+      schema_version: 5,
       meta: { name: '', created_at: 0, updated_at: 0, app_version: '' },
       rules: rulesRef.current,
       hotkeys: { ...hotkeysRef.current },
@@ -1840,9 +1848,10 @@ export default function PanelApp() {
     if (inspect) setShowRepair(true);
   }
 
-  function pushRules(updater: (prev: BurstRule[]) => BurstRule[]) {
-    if (profilePersistence.isChanging()) return;
-    const next = updater(rulesRef.current);
+  function pushRules(updater: (prev: BurstRule[]) => BurstRule[]): Promise<boolean> {
+    if (profilePersistence.isChanging()) return Promise.resolve(false);
+    const previous = rulesRef.current;
+    const next = updater(previous);
     const ticket = captureProfileWrite();
     rulesRef.current = next;
     setRules(next);
@@ -1853,23 +1862,28 @@ export default function PanelApp() {
         return invoke('set_rules', { rules: next });
       })
       .then(() => {
-        if (profilePersistence.isCurrent(ticket)) saveProfile(ticket);
+        if (!profilePersistence.isCurrent(ticket)) return false;
+        saveProfile(ticket);
+        return true;
       })
       .catch(async (e) => {
-        if (!profilePersistence.isCurrent(ticket)) return;
+        if (!profilePersistence.isCurrent(ticket)) return false;
         toast.error(`保存规则失败：${e}`);
         try {
           const engineRules = await invoke<BurstRule[]>('get_rules');
-          if (!profilePersistence.isCurrent(ticket)) return;
+          if (!profilePersistence.isCurrent(ticket)) return false;
           rulesRef.current = engineRules;
           setRules(engineRules);
         } catch {
-          rulesRef.current = defaultRules();
-          setRules(rulesRef.current);
+          // 无法读回引擎时保留编辑前的规则，避免默认规则替换使草稿所属卡片消失。
+          if (!profilePersistence.isCurrent(ticket)) return false;
+          rulesRef.current = previous;
+          setRules(previous);
         }
         if (writable) saveProfile(ticket);
+        return false;
       });
-    profilePersistence.track(operation);
+    return profilePersistence.track(operation);
   }
 
   function addRule(mode: BurstMode = 'hold') {
@@ -1881,7 +1895,15 @@ export default function PanelApp() {
   }
 
   function updateRule(id: string, patch: Partial<BurstRule>) {
-    pushRules((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    return pushRules((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+
+  async function saveSequence(id: string, steps: OutputStep[]) {
+    if (!(await updateRule(id, { steps }))) {
+      throw new Error('队列保存未完成，草稿已保留，请检查提示后重试');
+    }
+    // 跟踪的规则更新已结束，再等待写盘，避免 flush 等待自身造成死锁。
+    await profilePersistence.flush();
   }
 
   function toggleAdvanced(id: string) {
@@ -1915,13 +1937,13 @@ export default function PanelApp() {
   }
 
   // 单键规则（横版可表达的形态）+ 统一间隔显示值
-  const hSingleRules = rules.filter((r) => keyEq(r.trigger_key, r.target_key));
-  const hUnifiedInterval = hSingleRules[0]?.interval_ms ?? unifiedInterval;
+  const hSingleRules = rules.filter((r) => isSimpleRule(r));
+  const hUnifiedInterval = hSingleRules[0]?.steps[0].interval_ms ?? unifiedInterval;
 
   // 左键点键：无 → 切换 → 长按 → 无 轮换（高级规则键不响应）
   function handleHCycleKey(key: KeyId) {
     const onKey = rules.filter((r) => keyEq(r.trigger_key, key));
-    const single = onKey.find((r) => keyEq(r.target_key, key));
+    const single = onKey.find((r) => isSimpleRule(r));
     if (onKey.length > 1 || (onKey.length === 1 && !single)) return;
     if (!single) {
       pushRules((prev) => [...prev, newSingleKeyRule(key, 'toggle', hUnifiedInterval)]);
@@ -1947,7 +1969,7 @@ export default function PanelApp() {
     if (
       mode === 'toggle' &&
       !keyPolicies.coincident_toggle &&
-      keyEq(rule.trigger_key, rule.target_key)
+      rule.steps.some((step) => keyEq(rule.trigger_key, step.key))
     ) {
       toast.warning(
         `${INPUT_MODE_LABELS[inputMode]}下切换连发的启动键不能与连发按键相同，请先在高级设置里改长按键`,
@@ -2027,7 +2049,9 @@ export default function PanelApp() {
   function handleHSetInterval(ms: number) {
     setUnifiedInterval(ms);
     pushRules((prev) =>
-      prev.map((r) => (keyEq(r.trigger_key, r.target_key) ? { ...r, interval_ms: ms } : r)),
+      prev.map((r) =>
+        isSimpleRule(r) ? { ...r, steps: [{ ...r.steps[0], interval_ms: ms }] } : r,
+      ),
     );
   }
 
@@ -2172,9 +2196,10 @@ export default function PanelApp() {
 
   /** 组头状态区的规则名：启动键与连发按键相同时只写一个键名。 */
   function ruleLabel(rule: BurstRule): string {
-    return keyEq(rule.trigger_key, rule.target_key)
-      ? keyLabel(rule.target_key)
-      : `${keyLabel(rule.trigger_key)}→${keyLabel(rule.target_key)}`;
+    if (rule.steps.length > 1) return `${keyLabel(rule.trigger_key)}→${rule.steps.length} 步队列`;
+    return keyEq(rule.trigger_key, rule.steps[0].key)
+      ? keyLabel(rule.steps[0].key)
+      : `${keyLabel(rule.trigger_key)}→${keyLabel(rule.steps[0].key)}`;
   }
 
   async function handleDelete(id: string) {
@@ -2480,10 +2505,10 @@ export default function PanelApp() {
         id,
         enabled: false,
         trigger_key: keyboardKey(trigger),
-        target_key: keyboardKey(target),
+        steps: [{ key: keyboardKey(target), interval_ms: 50 }],
         mode,
         stop_key: null,
-        interval_ms: 50,
+
         group: SAMPLE_GROUP,
       });
       return [
@@ -2508,7 +2533,7 @@ export default function PanelApp() {
     const mark = (k: KeyId | null) => k && used.add(keyToken(k));
     for (const r of list) {
       mark(r.trigger_key);
-      mark(r.target_key);
+      for (const key of outputKeys(r)) mark(key);
       mark(r.stop_key);
     }
     mark(hotkeys.global_toggle);
@@ -2858,6 +2883,7 @@ export default function PanelApp() {
             intervalMax={MAX_INTERVAL_MS}
             onIntervalChange={handleHSetInterval}
             onCycleKey={handleHCycleKey}
+            onEditDetails={() => void switchLayout('vertical')}
             onSetEnabled={handleHSetEnabled}
             onSetMode={handleHSetMode}
             onSetGroup={handleHSetGroup}
@@ -2887,6 +2913,7 @@ export default function PanelApp() {
               <RuleCard
                 key={rule.id}
                 rule={rule}
+                progress={ruleProgress[rule.id]}
                 isActive={activeRuleIds.has(rule.id)}
                 isPaused={pausedRuleIds.has(rule.id)}
                 isLatest={rule.id === latestId}
@@ -2904,6 +2931,7 @@ export default function PanelApp() {
                 groups={groupList}
                 drag={cardDragHandlers(rule)}
                 onPatch={(patch) => updateRule(rule.id, patch)}
+                onSaveSequence={(steps) => saveSequence(rule.id, steps)}
                 onSetMode={(mode) => setRuleMode(rule, mode)}
                 onToggleAdvanced={() => toggleAdvanced(rule.id)}
                 onDelete={() => void handleDelete(rule.id)}

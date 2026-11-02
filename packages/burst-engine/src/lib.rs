@@ -1,11 +1,19 @@
+mod output_queue;
+mod recorder;
 mod rules;
+pub use recorder::RecordingSnapshot;
 mod scheduler;
+pub use scheduler::RuleProgress;
 pub mod stress;
 
 #[cfg(test)]
 mod pipeline_tests;
 #[cfg(test)]
 mod preempt_tests;
+#[cfg(test)]
+mod safety_tests;
+#[cfg(test)]
+mod sequence_lifecycle_tests;
 #[cfg(test)]
 mod test_support;
 
@@ -77,10 +85,19 @@ pub fn rehook_keyboard() {}
 type GlobalChangedCb = Arc<Mutex<Option<Box<dyn Fn(bool) + Send + Sync>>>>;
 type PanelToggleCb = Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>;
 type ToggleChangedCb = Arc<Mutex<Option<Box<dyn Fn(KeyId, bool) + Send + Sync>>>>;
+#[cfg(test)]
+type RoutingPause = Mutex<Option<Box<dyn FnOnce() + Send>>>;
 
 /// 关键路径锁兜底：若前一持锁者 panic 导致 Mutex 中毒,强行复活并继续。
 /// 按键工具最差故障是键盘卡死,值得给一层硬兜底；连发线程已被 catch_unwind
 /// 包裹,持锁期间也仅做 HashMap/Vec 操作,正常路径不会中毒。
+static NEXT_PREVIEW: AtomicU64 = AtomicU64::new(1);
+
+fn terminal_progress(progress: &RuleProgress) -> bool {
+    progress.error.is_some()
+        || (progress.rule_id.starts_with("\0preview#") && progress.completed_cycles > 0)
+}
+
 fn revive<T>(r: std::sync::LockResult<T>) -> T {
     r.unwrap_or_else(|e| e.into_inner())
 }
@@ -118,13 +135,16 @@ pub struct KeyProcessResult {
 pub struct RuleStates {
     pub running: Vec<String>,
     pub paused: Vec<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct ActiveRule {
     rule: Arc<BurstRule>,
-    /// 被同组长按插队而让位：仍算开启，但调度器里已停；恢复时重新 `start_rule`。
+    /// 被同组长按插队而让位，调度器保留游标与剩余等待。
     paused: bool,
+    /// 插队期间才开启的切换规则尚未排程，松手后需要首次启动。
+    pending_start: bool,
 }
 
 impl ActiveRule {
@@ -144,6 +164,7 @@ struct RuntimeState {
     /// 栈空即删键，使「组里有没有长按按着」只需查键是否存在，不会被残留的空栈误判。
     hold_stacks: HashMap<String, Vec<String>>,
     stop_generation: u64,
+    pending_stops: usize,
 }
 
 impl RuntimeState {
@@ -166,6 +187,8 @@ pub struct BurstEngine {
     /// `0` 表示未设置。物理输入热路径据此免锁判定停止键，保证紧急停止 100% 触发
     /// 又不在每次按键时加 `hotkeys` 锁。由 [`set_hotkeys`] 维护。
     dedicated_stop: AtomicU64,
+    /// 热键急停之前不获取 runtime 锁；入口代际用于拒绝跨停止边界的在途触发。
+    input_generation: AtomicU64,
     /// 后端切换进行中标志。置位期间物理触发不启动任何规则，使「停旧后端连发 → init_backend
     /// 换后端」窗口内不会出现目标键 down 走旧后端、up 走新后端的错配卡键。不动 `global_enabled`，
     /// 故用户在切换窗口内按下的全局停止热键得以保留。由 [`BurstEngine::begin_backend_switch`] /
@@ -176,6 +199,11 @@ pub struct BurstEngine {
     /// 面板显隐热键触发时调用。
     on_panel_toggle: PanelToggleCb,
     on_toggle_changed: ToggleChangedCb,
+    recorder: Mutex<recorder::Recorder>,
+    recording: AtomicBool,
+    recorder_start: Mutex<()>,
+    #[cfg(test)]
+    routing_pause: RoutingPause,
 }
 
 /// 把 [`KeyId`] 编码为非零 `u64`，供 `dedicated_stop` 无锁缓存比较。`0` 保留给「未设置」。
@@ -209,16 +237,23 @@ impl BurstEngine {
                 active_rules: HashMap::new(),
                 hold_stacks: HashMap::new(),
                 stop_generation: 0,
+                pending_stops: 0,
             })),
             physical_pressed: Arc::new(Mutex::new(HashSet::new())),
             simulated_keys,
             scheduler,
             hotkeys: Arc::new(Mutex::new(Hotkeys::default())),
             dedicated_stop: AtomicU64::new(0),
+            input_generation: AtomicU64::new(0),
             switching_backend: AtomicBool::new(false),
             on_global_changed: Arc::new(Mutex::new(None)),
             on_panel_toggle: Arc::new(Mutex::new(None)),
             on_toggle_changed: Arc::new(Mutex::new(None)),
+            recorder: Mutex::new(recorder::Recorder::default()),
+            recording: AtomicBool::new(false),
+            recorder_start: Mutex::new(()),
+            #[cfg(test)]
+            routing_pause: Mutex::new(None),
         }
     }
 
@@ -246,9 +281,15 @@ impl BurstEngine {
     /// 进入后端切换：置「切换中」标志并停连发、经当前（旧）后端阻塞释放所有已按下的目标键。
     /// 标志置位后物理触发不再启动规则，故切换窗口内不会产生 down/up 跨后端错配。必须与
     /// [`BurstEngine::end_backend_switch`] 成对调用（中间执行 `init_backend`）。
-    pub fn begin_backend_switch(&self) {
+    pub fn begin_backend_switch(&self) -> Result<(), String> {
         self.switching_backend.store(true, Ordering::SeqCst);
-        self.stop_runtime_activity(true);
+        if !self.stop_runtime_activity(true) {
+            self.switching_backend.store(false, Ordering::SeqCst);
+            return Err(
+                "无法确认旧输入通道已停止并释放按键，请停止输出后重试，当前输入模式未切换".into(),
+            );
+        }
+        Ok(())
     }
 
     /// 结束后端切换：清除「切换中」标志，恢复物理触发→规则启动。全局开关状态未被本过程改动，
@@ -304,6 +345,32 @@ impl BurstEngine {
 
     /// 活跃规则按运行 / 暂停分区，供前端区分「在跑」与「被插队暂停」。
     pub fn get_rule_states(&self) -> RuleStates {
+        if let Some(error) = self.output_error() {
+            self.cancel_recording();
+            let mut runtime = revive(self.runtime.lock());
+            runtime.clear_activity();
+            if !matches!(
+                runtime.lifecycle,
+                EngineLifecycle::ShuttingDown | EngineLifecycle::Shutdown
+            ) {
+                runtime.lifecycle = EngineLifecycle::Paused;
+            }
+            if self.global_enabled.swap(false, Ordering::SeqCst) {
+                self.notify_global_changed(false);
+            }
+            return RuleStates {
+                error: Some(error),
+                ..Default::default()
+            };
+        }
+        for failed in self
+            .scheduler
+            .progress()
+            .into_iter()
+            .filter(terminal_progress)
+        {
+            self.stop_rule_internal(&failed.rule_id, true, None);
+        }
         let mut states = RuleStates::default();
         for (id, active) in &revive(self.runtime.lock()).active_rules {
             if active.paused {
@@ -328,16 +395,17 @@ impl BurstEngine {
     }
 
     pub fn on_key_press_event(&self, key: KeyId) -> KeyProcessResult {
+        let generation = self.input_generation.load(Ordering::SeqCst);
         let is_new_physical = revive(self.physical_pressed.lock()).insert(key);
 
         // 安全底线：专用全局停止键 100% 可触发。用无锁原子缓存判定，物理输入热路径不新增
         // 跨线程锁；先于去重——即便 physical_pressed 因注入回灌残留幻影项导致
-        // is_new_physical=false，停止仍会触发。停止幂等且受 `enabled` 拦截重复，专用停止键
+        // is_new_physical=false，停止仍会触发。仅在全局开启或录制中执行停止，专用停止键
         // 不是 start 键，无 enable/disable 抖动。
         let stop_cache = self.dedicated_stop.load(Ordering::Relaxed);
         if stop_cache != 0
             && stop_cache == encode_key_id(key)
-            && self.global_enabled.load(Ordering::SeqCst)
+            && (self.global_enabled.load(Ordering::SeqCst) || self.recording.load(Ordering::SeqCst))
         {
             self.set_global_enabled(false, false);
             return KeyProcessResult {
@@ -360,6 +428,17 @@ impl BurstEngine {
             };
         }
 
+        if self.recording.load(Ordering::SeqCst) {
+            let mut recorder = revive(self.recorder.lock());
+            recorder.input(key, false, std::time::Instant::now());
+            self.recording
+                .store(recorder.is_recording(), Ordering::SeqCst);
+            return KeyProcessResult {
+                accepted_physical: true,
+                handled: true,
+            };
+        }
+
         // 后端切换中或全局未启用：放行物理事件但不启动任何规则。切换中拦截规则启动，避免目标键
         // down/up 跨新旧后端错配卡键；停止键与热键已在上方先行处理，不受此拦截影响。
         if self.switching_backend.load(Ordering::SeqCst)
@@ -372,9 +451,11 @@ impl BurstEngine {
         }
 
         let rules = revive(self.rules.lock()).enabled_press_rules(key);
+        #[cfg(test)]
+        self.pause_routing();
         let mut handled = false;
         for rule in rules {
-            handled = self.handle_rule_press(key, rule) || handled;
+            handled = self.handle_rule_press(key, rule, generation) || handled;
         }
         KeyProcessResult {
             accepted_physical: true,
@@ -383,7 +464,15 @@ impl BurstEngine {
     }
 
     pub fn on_key_release_event(&self, key: KeyId) -> KeyProcessResult {
+        let generation = self.input_generation.load(Ordering::SeqCst);
         let accepted_physical = revive(self.physical_pressed.lock()).remove(&key);
+        if self.recording.load(Ordering::SeqCst) {
+            revive(self.recorder.lock()).input(key, true, std::time::Instant::now());
+            return KeyProcessResult {
+                accepted_physical,
+                handled: true,
+            };
+        }
         if !accepted_physical {
             return KeyProcessResult {
                 accepted_physical: false,
@@ -392,9 +481,11 @@ impl BurstEngine {
         }
 
         let rules = revive(self.rules.lock()).enabled_hold_release_rules(key);
+        #[cfg(test)]
+        self.pause_routing();
         let mut handled = false;
         for rule in rules {
-            handled = self.stop_rule(&rule.id) || handled;
+            handled = self.stop_rule_internal(&rule.id, false, Some(generation)) || handled;
         }
         KeyProcessResult {
             accepted_physical,
@@ -404,6 +495,9 @@ impl BurstEngine {
 
     pub fn set_global_enabled(&self, enabled: bool, wait: bool) {
         if enabled {
+            if self.output_error().is_some() {
+                return;
+            }
             // 在同一把 runtime 锁内判定关停态并落定 global_enabled + lifecycle，避免两类割裂：
             // (1) 关停期间被热键开启复活成 Running、且 global_enabled 残留 true（调度器已拆，状态割裂）；
             // (2) global_enabled 先 true、lifecycle 后 Running 的窗口里物理触发被 runtime_can_start 误丢。
@@ -415,7 +509,11 @@ impl BurstEngine {
                 return;
             }
             self.global_enabled.store(true, Ordering::SeqCst);
-            runtime.lifecycle = EngineLifecycle::Running;
+            runtime.lifecycle = if runtime.pending_stops == 0 {
+                EngineLifecycle::Running
+            } else {
+                EngineLifecycle::Stopping
+            };
             self.notify_global_changed(true);
         } else {
             // 与 enable 分支对称：在 runtime 锁内落定 global_enabled=false，使开关状态与后续的
@@ -438,10 +536,11 @@ impl BurstEngine {
                 return;
             }
             runtime.lifecycle = EngineLifecycle::ShuttingDown;
-            runtime.stop_generation = runtime.stop_generation.saturating_add(1);
+            self.advance_generation(&mut runtime);
             runtime.clear_activity();
             runtime.stop_generation
         };
+        self.cancel_recording();
         self.global_enabled.store(false, Ordering::SeqCst);
         if !self.scheduler.shutdown_blocking(generation) {
             release_simulated_keys(&self.simulated_keys);
@@ -456,6 +555,10 @@ impl BurstEngine {
 
     pub fn scheduler_hp_degraded(&self) -> bool {
         self.scheduler.hp_degraded()
+    }
+
+    pub fn output_error(&self) -> Option<String> {
+        self.scheduler.failure()
     }
 
     pub fn lifecycle(&self) -> EngineLifecycle {
@@ -483,18 +586,18 @@ impl BurstEngine {
             }
             return true;
         }
-        if start == Some(key) && !enabled {
-            self.set_global_enabled(true, false);
+        if stop == Some(key) && (enabled || self.recording.load(Ordering::SeqCst)) {
+            self.set_global_enabled(false, false);
             return true;
         }
-        if stop == Some(key) && enabled {
-            self.set_global_enabled(false, false);
+        if start == Some(key) && !enabled {
+            self.set_global_enabled(true, false);
             return true;
         }
         false
     }
 
-    fn handle_rule_press(&self, key: KeyId, rule: Arc<BurstRule>) -> bool {
+    fn handle_rule_press(&self, key: KeyId, rule: Arc<BurstRule>, generation: u64) -> bool {
         match rule.mode {
             BurstMode::Hold => {
                 if rule.trigger_key != key {
@@ -503,23 +606,23 @@ impl BurstEngine {
                 // 滚轮触发键无法「按住」：每格作为一次瞬发点按——委派调度器一次性点按，
                 // 不进 active_rules、不靠 release 停止（详见 tap_once_rule 与 rules.rs 索引排除）。
                 if key.is_wheel() {
-                    self.tap_once_rule(rule)
+                    self.tap_once_rule(rule, generation)
                 } else {
-                    self.start_rule(rule)
+                    self.start_rule(rule, generation)
                 }
             }
-            BurstMode::Toggle => self.handle_toggle_press(key, rule),
+            BurstMode::Toggle => self.handle_toggle_press(key, rule, generation),
         }
     }
 
-    fn handle_toggle_press(&self, key: KeyId, rule: Arc<BurstRule>) -> bool {
+    fn handle_toggle_press(&self, key: KeyId, rule: Arc<BurstRule>, generation: u64) -> bool {
         let stop = rule.stop_key.unwrap_or(rule.trigger_key);
-        let target = rule.target_key;
+        let target = rule.steps[0].key;
         let mut start_rule = false;
         let mut stop_ids = Vec::new();
         {
             let mut runtime = revive(self.runtime.lock());
-            if !runtime_can_start(&runtime) {
+            if !self.can_start_output(&runtime, generation) {
                 return false;
             }
             let started = runtime
@@ -531,11 +634,7 @@ impl BurstEngine {
                     return false;
                 }
                 // 被插队暂停的规则调度器里已停，只移出活跃集合，松手后也就不再恢复。
-                if runtime
-                    .active_rules
-                    .remove(&rule.id)
-                    .is_some_and(|a| !a.paused)
-                {
+                if runtime.active_rules.remove(&rule.id).is_some() {
                     stop_ids.push(rule.id.clone());
                 }
             } else {
@@ -555,7 +654,7 @@ impl BurstEngine {
                         })
                         .collect::<Vec<_>>();
                     for id in displaced {
-                        if runtime.active_rules.remove(&id).is_some_and(|a| !a.paused) {
+                        if runtime.active_rules.remove(&id).is_some() {
                             stop_ids.push(id);
                         }
                     }
@@ -567,6 +666,7 @@ impl BurstEngine {
                     ActiveRule {
                         rule: rule.clone(),
                         paused,
+                        pending_start: paused,
                     },
                 );
                 start_rule = !paused;
@@ -593,11 +693,13 @@ impl BurstEngine {
     /// 比如松开长按要恢复切换 T、同时 T 的停止键把它移出活跃集，`stop T` 先到、`start T` 后到，
     /// 调度器里留下一条引擎以为已停的连发。发送只是无界通道入队加 SetEvent，不阻塞，
     /// 持锁发送不会拖慢钩子线程。
-    fn start_rule(&self, rule: Arc<BurstRule>) -> bool {
+    fn start_rule(&self, rule: Arc<BurstRule>, generation: u64) -> bool {
         let mut stop_ids = Vec::new();
         {
             let mut runtime = revive(self.runtime.lock());
-            if !runtime_can_start(&runtime) || runtime.active_rules.contains_key(&rule.id) {
+            if !self.can_start_output(&runtime, generation)
+                || runtime.active_rules.contains_key(&rule.id)
+            {
                 return false;
             }
             if let Some(group) = rule.group.as_deref() {
@@ -618,11 +720,12 @@ impl BurstEngine {
                 ActiveRule {
                     rule: rule.clone(),
                     paused: false,
+                    pending_start: false,
                 },
             );
             let generation = runtime.stop_generation;
             for id in stop_ids {
-                self.scheduler.stop_rule(id, generation);
+                self.scheduler.pause_rule(id, generation);
             }
             self.scheduler.start_rule(rule, generation);
         }
@@ -632,23 +735,50 @@ impl BurstEngine {
     /// 滚轮 Hold 的一次性点按：仅校验 lifecycle、捕获 generation 后委派调度器点按一次。
     /// 不登记 `active_rules`——瞬发且可重复，登记会被去重/释放逻辑误吞后续滚轮格。
     /// 也不参与组内插队：每格只是一次点按，没有「按住」可言，与同组切换同时跑即可。
-    fn tap_once_rule(&self, rule: Arc<BurstRule>) -> bool {
-        let generation = {
-            let runtime = revive(self.runtime.lock());
-            if !runtime_can_start(&runtime) {
-                return false;
-            }
-            runtime.stop_generation
-        };
+    fn tap_once_rule(&self, rule: Arc<BurstRule>, generation: u64) -> bool {
+        let runtime = revive(self.runtime.lock());
+        if !self.can_start_output(&runtime, generation) {
+            return false;
+        }
         self.scheduler.tap_once(rule, generation);
         true
+    }
+
+    fn can_start_output(&self, runtime: &RuntimeState, generation: u64) -> bool {
+        runtime_can_start(runtime)
+            && runtime.stop_generation == generation
+            && self.global_enabled.load(Ordering::SeqCst)
+            && !self.switching_backend.load(Ordering::SeqCst)
+            && !self.recording.load(Ordering::SeqCst)
+            && self.scheduler.failure().is_none()
     }
 
     /// 长按松开。在跑的组内长按松手后把组还给上一个：栈里仍按着的前一条长按，
     /// 否则被暂停的切换规则；本就被暂停（栈中间先松）的只出栈，不影响栈顶。
     fn stop_rule(&self, rule_id: &str) -> bool {
+        self.stop_rule_internal(rule_id, false, None)
+    }
+
+    fn stop_rule_internal(
+        &self,
+        rule_id: &str,
+        only_failed: bool,
+        generation: Option<u64>,
+    ) -> bool {
         let mut resume = None;
         let mut runtime = revive(self.runtime.lock());
+        if generation.is_some_and(|generation| generation != runtime.stop_generation) {
+            return false;
+        }
+        if only_failed
+            && !self
+                .scheduler
+                .progress()
+                .iter()
+                .any(|p| p.rule_id == rule_id && terminal_progress(p))
+        {
+            return false;
+        }
         let Some(active) = runtime.active_rules.remove(rule_id) else {
             return false;
         };
@@ -672,64 +802,191 @@ impl BurstEngine {
                 });
                 if let Some(next) = candidate.and_then(|id| runtime.active_rules.get_mut(&id)) {
                     next.paused = false;
-                    resume = Some(next.rule.clone());
+                    resume = Some((next.rule.clone(), std::mem::take(&mut next.pending_start)));
                 }
             }
         }
         let generation = runtime.stop_generation;
         // 与切换互斥替换同一契约：先停后启，调度器里同组任一时刻至多一条在跑。
         // 命令在锁内发出，见 [`BurstEngine::start_rule`]。
-        if !active.paused {
-            self.scheduler.stop_rule(rule_id.to_string(), generation);
-        }
-        if let Some(rule) = resume {
-            self.scheduler.start_rule(rule, generation);
+        self.scheduler.stop_rule(rule_id.to_string(), generation);
+        if let Some((rule, pending_start)) = resume {
+            if pending_start {
+                self.scheduler.start_rule(rule, generation);
+            } else {
+                self.scheduler.resume_rule(rule.id.clone(), generation);
+            }
         }
         true
     }
 
-    /// 复位 hook 维护的物理按键账本。仅在停止 / 暂停 / 切模式 / 退出等低频复位点调用，
-    /// 清掉注入回灌偶发漏过过滤而残留的「幻影按下」，避免之后真实物理按键被
-    /// `on_key_press_event` 的去重逻辑误吞。引擎维护自身不变量的安全底线，不依赖
-    /// 调度器跨线程兜底（调度器绝不触碰该集合，物理输入热路径因此无跨线程锁争用）。
+    pub fn get_rule_progress(&self) -> Vec<RuleProgress> {
+        self.scheduler.progress()
+    }
+
+    pub fn preview_output(&self, steps: Vec<qzh_profile::OutputStep>) -> Result<String, String> {
+        if let Some(error) = self.output_error() {
+            return Err(error);
+        }
+        if self.recording.load(Ordering::SeqCst) {
+            return Err("请先结束录制再试播".into());
+        }
+        if !self.global_enabled.load(Ordering::SeqCst) {
+            return Err("请先启用全局开关再试播".into());
+        }
+        let id = format!("\0preview#{}", NEXT_PREVIEW.fetch_add(1, Ordering::Relaxed));
+        let rule = Arc::new(BurstRule {
+            id: id.clone(),
+            enabled: true,
+            trigger_key: KeyId::Keyboard(0),
+            mode: BurstMode::Toggle,
+            stop_key: None,
+            group: None,
+            steps,
+        });
+        rule.validate().map_err(|e| e.to_string())?;
+        if !self.stop_runtime_activity(true) {
+            return Err("原有输出尚未确认停止，请稍后重试试播".into());
+        }
+        let mut runtime = revive(self.runtime.lock());
+        if !self.can_start_output(&runtime, runtime.stop_generation) {
+            return Err("当前无法开始试播".into());
+        }
+        runtime.clear_activity();
+        self.advance_generation(&mut runtime);
+        let generation = runtime.stop_generation;
+        self.scheduler.stop_all_async(generation);
+        runtime.active_rules.insert(
+            id.clone(),
+            ActiveRule {
+                rule: rule.clone(),
+                paused: false,
+                pending_start: false,
+            },
+        );
+        self.scheduler.play_once(rule, generation);
+        Ok(id)
+    }
+
+    pub fn stop_preview(&self, id: &str) -> Result<(), String> {
+        if !id.starts_with("\0preview#") {
+            return Err("无效的试播标识".into());
+        }
+        self.stop_rule(id);
+        Ok(())
+    }
+
+    pub fn start_recording(&self, stop_key: KeyId) -> Result<RecordingSnapshot, String> {
+        if let Some(error) = self.output_error() {
+            return Err(error);
+        }
+        let _start = revive(self.recorder_start.lock());
+        if self.recording.load(Ordering::SeqCst) {
+            return Err("已有录制正在进行".into());
+        }
+        if !self.stop_runtime_activity(true) {
+            return Err("原有输出尚未确认停止，请稍后重试录制".into());
+        }
+        let mut runtime = revive(self.runtime.lock());
+        if matches!(
+            runtime.lifecycle,
+            EngineLifecycle::Stopping | EngineLifecycle::ShuttingDown | EngineLifecycle::Shutdown
+        ) || self.switching_backend.load(Ordering::SeqCst)
+        {
+            return Err("引擎正在停止、退出或切换输入模式".into());
+        }
+        runtime.clear_activity();
+        self.advance_generation(&mut runtime);
+        self.scheduler.stop_all_async(runtime.stop_generation);
+        let mut recorder = revive(self.recorder.lock());
+        let snapshot = recorder.start(stop_key, std::time::Instant::now())?;
+        self.recording.store(true, Ordering::SeqCst);
+        Ok(snapshot)
+    }
+
+    pub fn get_recording(&self) -> RecordingSnapshot {
+        let mut recorder = revive(self.recorder.lock());
+        let snapshot = recorder.snapshot(std::time::Instant::now());
+        self.recording.store(snapshot.recording, Ordering::SeqCst);
+        snapshot
+    }
+
+    pub fn stop_recording(&self, session_id: u64) -> Result<RecordingSnapshot, String> {
+        let mut recorder = revive(self.recorder.lock());
+        let result = recorder.stop(session_id)?;
+        self.recording.store(false, Ordering::SeqCst);
+        Ok(result)
+    }
+
+    /// 退出后不会再接受输入；正常停止必须等真实 up 清除按下态，防止自动重复重启输出。
     fn reset_physical_ledger(&self) {
         revive(self.physical_pressed.lock()).clear();
     }
 
-    fn stop_runtime_activity(&self, wait: bool) {
+    fn cancel_recording(&self) {
+        let mut recorder = revive(self.recorder.lock());
+        recorder.cancel();
+        self.recording.store(false, Ordering::SeqCst);
+    }
+
+    fn advance_generation(&self, runtime: &mut RuntimeState) {
+        runtime.stop_generation = runtime.stop_generation.saturating_add(1);
+        self.input_generation
+            .store(runtime.stop_generation, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    fn pause_routing(&self) {
+        let pause = revive(self.routing_pause.lock()).take();
+        if let Some(pause) = pause {
+            pause();
+        }
+    }
+
+    fn stop_runtime_activity(&self, wait: bool) -> bool {
+        self.cancel_recording();
         let generation = {
             let mut runtime = revive(self.runtime.lock());
             if matches!(
                 runtime.lifecycle,
                 EngineLifecycle::ShuttingDown | EngineLifecycle::Shutdown
             ) {
-                return;
+                return false;
             }
             runtime.lifecycle = EngineLifecycle::Stopping;
-            runtime.stop_generation = runtime.stop_generation.saturating_add(1);
+            runtime.pending_stops = runtime.pending_stops.saturating_add(1);
+            self.advance_generation(&mut runtime);
             runtime.clear_activity();
             runtime.stop_generation
         };
 
-        if wait {
-            if !self.scheduler.stop_all_blocking(generation) {
+        let stopped = if wait {
+            let stopped = self.scheduler.stop_all_blocking(generation);
+            if !stopped {
                 release_simulated_keys(&self.simulated_keys);
             }
+            stopped
         } else {
             self.scheduler.stop_all_async(generation);
-        }
+            true
+        };
         clear_pending_injections();
         clear_relay_injections();
-        self.reset_physical_ledger();
 
         let mut runtime = revive(self.runtime.lock());
-        if runtime.lifecycle != EngineLifecycle::Shutdown {
+        runtime.pending_stops = runtime.pending_stops.saturating_sub(1);
+        if !matches!(
+            runtime.lifecycle,
+            EngineLifecycle::ShuttingDown | EngineLifecycle::Shutdown
+        ) && runtime.pending_stops == 0
+        {
             runtime.lifecycle = if self.global_enabled.load(Ordering::SeqCst) {
                 EngineLifecycle::Running
             } else {
                 EngineLifecycle::Paused
             };
         }
+        stopped
     }
 }
 
@@ -976,10 +1233,12 @@ mod tests {
             id: id.to_string(),
             enabled: true,
             trigger_key,
-            target_key,
+            steps: vec![qzh_profile::profile::OutputStep {
+                key: target_key,
+                interval_ms: 10,
+            }],
             mode,
             stop_key: None,
-            interval_ms: 10,
             group: None,
         }
     }
@@ -1124,9 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_resets_physical_ledger_so_next_press_is_accepted() {
-        // 安全底线：停止/暂停时复位物理账本，清掉可能残留的幻影按下，
-        // 使之后真实按键不会被去重逻辑误吞。
+    fn stop_keeps_physical_down_until_release_then_accepts_a_new_press() {
         let engine = BurstEngine::new();
         let key = KeyId::Keyboard(0x60);
 
@@ -1134,10 +1391,10 @@ mod tests {
         // 未释放再次按下：去重判定为按住中，不接受为新物理按下。
         assert!(!engine.on_key_press_event(key).accepted_physical);
 
-        // 停止活动会复位物理账本。
         engine.set_global_enabled(false, false);
 
-        // 账本已复位：同一键再次按下重新被接受为首次物理按下。
+        assert!(!engine.on_key_press_event(key).accepted_physical);
+        assert!(engine.on_key_release_event(key).accepted_physical);
         assert!(engine.on_key_press_event(key).accepted_physical);
     }
 
@@ -1300,7 +1557,7 @@ mod tests {
         )]);
         engine.set_global_enabled(true, false);
 
-        engine.begin_backend_switch();
+        engine.begin_backend_switch().unwrap();
         engine.on_key_press(trigger);
         assert!(engine.get_active_ids().is_empty());
         engine.on_key_release(trigger);
@@ -1324,7 +1581,7 @@ mod tests {
         )]);
         engine.set_global_enabled(true, false);
 
-        engine.begin_backend_switch();
+        engine.begin_backend_switch().unwrap();
         // 模拟切换期间用户的停止（热键路径最终也调用 set_global_enabled(false)）。
         engine.set_global_enabled(false, false);
         engine.end_backend_switch();

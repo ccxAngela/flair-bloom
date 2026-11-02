@@ -32,10 +32,12 @@ fn rule(trigger: KeyId, target: KeyId, stop: Option<KeyId>) -> BurstRule {
         id: "r1".to_string(),
         enabled: true,
         trigger_key: trigger,
-        target_key: target,
+        steps: vec![crate::profile::OutputStep {
+            key: target,
+            interval_ms: 10,
+        }],
         mode: BurstMode::Toggle,
         stop_key: stop,
-        interval_ms: 10,
         group: None,
     }
 }
@@ -306,7 +308,7 @@ fn sanitize_disables_offending_rule_without_touching_its_keys() {
     );
     assert!(!p.rules[0].enabled, "违规规则应被停用");
     // 按键原样保留：改写成空会造出新的中间态，连锁面太大。
-    assert_eq!(p.rules[0].target_key, kb(RIGHT_ALT));
+    assert_eq!(p.rules[0].steps[0].key, kb(RIGHT_ALT));
     assert_eq!(p.rules[0].trigger_key, kb(KEY_Q));
 }
 

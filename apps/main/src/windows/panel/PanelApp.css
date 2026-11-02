@@ -946,3 +946,64 @@ select {
   color: var(--fb-text-weak);
   cursor: pointer;
 }
+.sequence-editor {
+  padding: 12px;
+  margin: 0;
+  min-width: 0;
+  border: 0;
+  border-top: 1px solid var(--fb-border);
+}
+.sequence-editor p {
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+.sequence-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.sequence-step {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0;
+  flex-wrap: wrap;
+}
+.sequence-step > span {
+  min-width: 18px;
+  font-size: 12px;
+}
+.sequence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+.sequence-editor button:not(.key-capture):not(.interval-step) {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  color: var(--fb-text-strong);
+  background: var(--fb-surface);
+  border: 1px solid var(--fb-border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.sequence-editor button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.sequence-progress {
+  margin: 6px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sequence-recording {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--fb-border);
+}

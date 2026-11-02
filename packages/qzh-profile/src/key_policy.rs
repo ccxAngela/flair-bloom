@@ -186,7 +186,7 @@ pub fn sanitize_hotkeys(hotkeys: &mut Hotkeys) -> Vec<&'static str> {
 pub fn slot_of(rule: &BurstRule, key: KeyId) -> KeySlot {
     let stop = rule.stop_key.unwrap_or(rule.trigger_key);
     let reads = key == rule.trigger_key || key == stop;
-    let writes = key == rule.target_key;
+    let writes = rule.steps.iter().any(|step| step.key == key);
     match (reads, writes) {
         (true, true) if rule.mode == BurstMode::Toggle => KeySlot::TriggerTargetToggle,
         (true, true) => KeySlot::TriggerTarget,
@@ -205,7 +205,10 @@ pub fn find_rule_violations(rules: &[BurstRule], caps: InjectCaps) -> Vec<(Strin
     for rule in rules.iter().filter(|r| r.enabled) {
         let stop = rule.stop_key.unwrap_or(rule.trigger_key);
         let mut seen: Vec<KeyId> = Vec::new();
-        for key in [rule.trigger_key, rule.target_key, stop] {
+        for key in [rule.trigger_key, stop]
+            .into_iter()
+            .chain(rule.steps.iter().map(|step| step.key))
+        {
             if seen.contains(&key) {
                 continue;
             }
