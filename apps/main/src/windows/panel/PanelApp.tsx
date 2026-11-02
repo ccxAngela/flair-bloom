@@ -1898,14 +1898,6 @@ export default function PanelApp() {
     return pushRules((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
 
-  async function saveSequence(id: string, steps: OutputStep[]) {
-    if (!(await updateRule(id, { steps }))) {
-      throw new Error('队列保存未完成，草稿已保留，请检查提示后重试');
-    }
-    // 跟踪的规则更新已结束，再等待写盘，避免 flush 等待自身造成死锁。
-    await profilePersistence.flush();
-  }
-
   function toggleAdvanced(id: string) {
     setAdvancedOpen((s) => ({ ...s, [id]: !s[id] }));
   }
@@ -2931,7 +2923,6 @@ export default function PanelApp() {
                 groups={groupList}
                 drag={cardDragHandlers(rule)}
                 onPatch={(patch) => updateRule(rule.id, patch)}
-                onSaveSequence={(steps) => saveSequence(rule.id, steps)}
                 onSetMode={(mode) => setRuleMode(rule, mode)}
                 onToggleAdvanced={() => toggleAdvanced(rule.id)}
                 onDelete={() => void handleDelete(rule.id)}

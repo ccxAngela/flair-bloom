@@ -5,6 +5,7 @@ import IntervalInput from './components/IntervalInput';
 import KeyCapture, {
   type CaptureReject,
   keyEq,
+  keyLabel,
   type KeyId,
   type KeyPolicies,
 } from './components/KeyCapture';
@@ -51,7 +52,6 @@ interface Props {
   groups: string[];
   drag: CardDragHandlers;
   onPatch: (patch: Partial<CardRule>) => void;
-  onSaveSequence: (steps: OutputStep[]) => Promise<void>;
   onSetMode: (mode: BurstMode) => void;
   onToggleAdvanced: () => void;
   onDelete: () => void;
@@ -85,7 +85,6 @@ export default function RuleCard({
   groups,
   drag,
   onPatch,
-  onSaveSequence,
   onSetMode,
   onToggleAdvanced,
   onDelete,
@@ -97,7 +96,6 @@ export default function RuleCard({
 }: Props) {
   const menuRef = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [sequenceOpen, setSequenceOpen] = useState(false);
   const multiple = rule.steps.length > 1;
   const isToggle = rule.mode === 'toggle';
   // 长按键与连发键分开时把「按住哪个键」提到主行：插队要按住的就是它，不能藏在高级设置里。
@@ -196,14 +194,21 @@ export default function RuleCard({
             </>
           )}
           <div className="rule-field" data-tour="rule-key">
-            <label>{multiple ? '输出队列' : '连发按键'}</label>
+            <label>{multiple ? '连发序列' : '连发按键'}</label>
             {multiple ? (
               <button
                 type="button"
                 className="key-capture sequence-open"
-                onClick={() => setSequenceOpen(true)}
+                onClick={onToggleAdvanced}
+                aria-label="编辑连发序列"
+                aria-expanded={showAdvanced}
+                title="编辑连发序列"
               >
-                {rule.steps.length} 步 · 编辑队列
+                {rule.steps
+                  .slice(0, 3)
+                  .map((step) => keyLabel(step.key))
+                  .join(' → ')}
+                {rule.steps.length > 3 ? ' …' : ''}
               </button>
             ) : (
               <KeyCapture
@@ -242,27 +247,6 @@ export default function RuleCard({
           aria-label="启用"
         />
       </div>
-      {!multiple && !sequenceOpen && (
-        <button
-          type="button"
-          className="expand-btn"
-          data-tour="sequence-add"
-          onClick={() => setSequenceOpen(true)}
-        >
-          ＋ 添加步骤／录制队列
-        </button>
-      )}
-      {sequenceOpen && (
-        <SequenceEditor
-          steps={rule.steps}
-          policy={policies.target}
-          min={intervalMin}
-          max={intervalMax}
-          onReject={onKeyReject}
-          onClose={() => setSequenceOpen(false)}
-          onSave={onSaveSequence}
-        />
-      )}
       {progress && (multiple || progress.error || progress.max_lateness_ms > 0) && (
         <p className="sequence-progress" role="status">
           {progress.error ??
@@ -271,36 +255,26 @@ export default function RuleCard({
       )}
       {showAdvanced && (
         <div className="rule-advanced">
-          {isToggle ? (
-            <>
-              <div className="rule-field">
-                <label>停止热键</label>
-                <KeyCapture
-                  onReject={onKeyReject}
-                  policy={policies.trigger}
-                  value={rule.stop_key ?? rule.trigger_key}
-                  onChange={(vk) => vk && onPatch({ stop_key: vk })}
-                />
-              </div>
-              <span className="adv-hint">默认与启动热键相同</span>
-            </>
-          ) : holdSplit ? (
-            <span className="adv-hint">长按键已在上面单独设置；改成与连发按键相同即回到单键</span>
-          ) : (
-            <>
-              <div className="rule-field">
-                <label>长按键</label>
-                <KeyCapture
-                  onReject={onKeyReject}
-                  policy={policies.trigger}
-                  value={rule.trigger_key}
-                  onChange={(vk) => vk && onPatch({ trigger_key: vk })}
-                  conflict={conflict}
-                />
-              </div>
-              <span className="adv-hint">默认与连发按键相同</span>
-            </>
-          )}
+          {isToggle || !holdSplit ? (
+            <div className="rule-field">
+              <label>{isToggle ? '停止热键' : '长按键'}</label>
+              <KeyCapture
+                onReject={onKeyReject}
+                policy={policies.trigger}
+                value={isToggle ? (rule.stop_key ?? rule.trigger_key) : rule.trigger_key}
+                onChange={(vk) => vk && onPatch(isToggle ? { stop_key: vk } : { trigger_key: vk })}
+                conflict={isToggle ? null : conflict}
+              />
+            </div>
+          ) : null}
+          <SequenceEditor
+            steps={rule.steps}
+            policy={policies.target}
+            min={intervalMin}
+            max={intervalMax}
+            onReject={onKeyReject}
+            onChange={(steps) => onPatch({ steps })}
+          />
         </div>
       )}
       <button
@@ -308,6 +282,7 @@ export default function RuleCard({
         data-tour="rule-advanced"
         onClick={onToggleAdvanced}
         aria-label="高级设置"
+        aria-expanded={showAdvanced}
       >
         <ChevronIcon size={10} className="chevron" />
         <span className="expand-label">{showAdvanced ? '收起高级设置' : '高级设置'}</span>
