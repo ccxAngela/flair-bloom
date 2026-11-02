@@ -1,3 +1,6 @@
+#[cfg(windows)]
+mod build_support;
+
 fn main() {
     // 必须先把 interception.dll 同步到 resources/，再交给 tauri_build：
     // tauri_build::build() 会校验 bundle.resources 里所有路径存在，否则中止。
@@ -23,7 +26,6 @@ fn copy_interception_dll() {
     use std::fs;
     use std::path::PathBuf;
 
-    // OUT_DIR = target/<profile>/build/<this-crate>-<hash>/out
     let Ok(out_dir) = env::var("OUT_DIR") else {
         return;
     };
@@ -47,7 +49,6 @@ fn copy_interception_dll() {
             continue;
         }
 
-        // CARGO_MANIFEST_DIR = apps/main/src-tauri
         let resources_dir = env::var("CARGO_MANIFEST_DIR")
             .map(PathBuf::from)
             .map(|p| p.join("resources"));
@@ -58,7 +59,7 @@ fn copy_interception_dll() {
         }
 
         for dest in &dests {
-            if let Err(e) = fs::copy(&dll, dest) {
+            if let Err(e) = build_support::copy_if_changed(&dll, dest) {
                 println!(
                     "cargo:warning=复制 interception.dll 到 {} 失败: {}",
                     dest.display(),
