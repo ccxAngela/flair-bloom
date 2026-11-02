@@ -82,6 +82,8 @@ cargo run -p burst-engine --bin scheduler_stress --release -- --rules 64 --inter
 
 ## L2 已落地：真 OS 往返冒烟
 
+Windows 队列接收器：`cargo run -p burst-engine --example sequence_smoke -- sendinput`，末尾可替换为 `interception`、`ddsimple` 或 `hidstick`。它使用真实调度器验证至少三轮 E→E→R 的顺序、最短间隔、完整抬起与全局停止，并以来源标记／本进程注入登记识别测试输出后吞掉，真实输入照常下传。目标后端初始化失败会直接失败，不把回退通用模式算作通过；测试不验证游戏接收或物理来源识别的可靠性。
+
 代码：`packages/burst-engine/src/smoke_tests.rs`（`#[cfg(all(test, windows))]` + `#[ignore]`）。
 
 自装一个 `WH_KEYBOARD_LL` hook，对带 `SIM_MARKER` 的自注入事件**捕获后直接吞掉**（返回 1，不下传）——既验证 `win_input` SendInput 注入 → LL hook → 还原出正确 vk/抬起/`SIM_MARKER` 整条真实链路，又**零副作用**（注入键不泄漏到前台窗口，物理键照常放行）。需交互式桌面会话，故 `#[ignore]`：

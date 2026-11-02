@@ -36,7 +36,7 @@
 | 2              | 按键字段裸 `u32` VK → `KeyId`（键盘 + 鼠标 5 键统一），可选字段 `null` 保留 | v0.2     |
 | 3              | `MouseButton` 新增 `WheelUp` / `WheelDown`                                  | v0.2.4   |
 | 4              | `BurstRule` 新增可选 `group` 字段（Toggle 互斥分组）                        | v0.2.5   |
-| 5              | 输出统一为 `steps`，完整迁移旧单键，独立配置目录保留回退数据 | Unreleased |
+| 5              | 输出统一为 `steps`，完整迁移旧单键，独立配置目录保留回退数据 | v0.9.0 |
 
 不升版本的默认值字段：`meta.signature`（水印署名，空串即未设置）。它在反序列化时就经 `sanitize_signature` 去控制字符、去首尾空白、截到 16 字符，导入、列表、保存所有读路径一处收口。`save_profile` 一律沿用文件里的旧值（前端自动保存每次从头拼 `meta`、不带署名），只有 `set_profile_signature` 能改，且要求持有 `flair.signature` 权益。
 
