@@ -4,12 +4,12 @@
 
 ## 应用模式
 
-| 模式                       | 现状                                                                                                                                                  |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 模式                       | 现状                                                                                                                                                                                                                                                                                                              |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 面板（`panel.html`）       | 全功能配置界面。一切最小化路径都收进浮窗——标题栏按钮、面板显隐热键，以及系统级最小化（Win+D / 任务栏 / Aero Shake，由 `on_window_event` 的 Resized + `is_minimized` 接管，先 `unminimize` 再进浮窗模式）；关闭按钮与 Alt+F4 都走 `handleClose`，按 `closeBehavior` 偏好收进浮窗或退出，未设偏好时每次询问（默认） |
-| 浮窗（`panel-float.html`） | 常驻置顶胶囊，显示激活规则、全局开关、展开主面板。Alt+F4 关浮窗 = 退出应用（`CloseRequested` 被 `prevent_close` 后转 `shutdown_and_exit`）：浮窗只有一行胶囊大小，放不下确认对话框，而放任它销毁会让收起状态的应用只剩托盘，且窗口销毁后无法再 `show` 回来 |
-| 托盘                       | 面板隐藏后进程常驻，连发继续有效。托盘菜单：全局开关、切换配置（动态菜单项）、打开面板、退出；托盘双击与再次启动应用都唤回面板；启用 / 禁用态切换图标。托盘是辅助入口而不是唯一入口：浮窗不占任务栏位，若面板也缩进任务栏，应用就只剩一个会被折叠起来的托盘图标 |
-| 桌宠（`pet.html`）         | 未实现，设计见 `docs/roadmaps/pet-mode.md`（draft）                                                                                                   |
+| 浮窗（`panel-float.html`） | 常驻置顶胶囊，显示激活规则、全局开关、展开主面板。Alt+F4 关浮窗 = 退出应用（`CloseRequested` 被 `prevent_close` 后转 `shutdown_and_exit`）：浮窗只有一行胶囊大小，放不下确认对话框，而放任它销毁会让收起状态的应用只剩托盘，且窗口销毁后无法再 `show` 回来                                                        |
+| 托盘                       | 面板隐藏后进程常驻，连发继续有效。托盘菜单：全局开关、切换配置（动态菜单项）、打开面板、退出；托盘双击与再次启动应用都唤回面板；启用 / 禁用态切换图标。托盘是辅助入口而不是唯一入口：浮窗不占任务栏位，若面板也缩进任务栏，应用就只剩一个会被折叠起来的托盘图标                                                   |
+| 桌宠（`pet.html`）         | 未实现，设计见 `docs/roadmaps/pet-mode.md`（draft）                                                                                                                                                                                                                                                               |
 
 ## 进程模型
 
@@ -34,6 +34,18 @@ FlairBloom.exe（单一 Tauri 进程）
 WebView 聚焦时 `WH_KEYBOARD_LL` 全局钩子不触发，面板与浮窗都用 `useKeyRelay` 把键盘事件中继到后端 `relay_key_event` 命令，交由引擎统一处理热键 / Toggle 触发 / `pressed_keys` 维护，避免聚焦窗口时热键被吞；同时阻止非编辑区的默认快捷键（F12、Ctrl+Shift+I 等，仅生产构建）。
 
 **AppHandle 不进 packages**：`win-driver` / `win-input` / `win-sysinfo` / `burst-engine` 所有函数均不接受 `AppHandle`。资源目录由 `commands/driver.rs` 从 `app.path().resource_dir()` 取得后传入，Tauri 状态管理留在 commands 层。
+
+## 使用统计
+
+`src-tauri/src/insights/` 是唯一采集宿主，面板、浮窗、托盘和热键共用进程会话。默认开启的选择由 `settings.json` 保留，设置页可关闭；关闭停止获取统计环境标识、清空待发队列，不回补关闭期，正在投递的请求可能完成。公开匿名协议归 [Platform 契约](https://cnb.cool/x-wink/playground/xwink-console/-/blob/main/packages/nest/platform/skills/xwink-platform/insights.md)，当前不接 UC 登录，也不使用 Billing 令牌。
+
+系统来源按平台分别为 Windows MachineGuid、macOS IOPlatformUUID、其他平台 machine-id，兼容版本 1 对值去首尾空白并转 ASCII 小写；读取失败才使用持久随机 UUID，写入失败明确标记 session 作用域。来源与兼容版本参与统一环境身份，产品不作为身份隔离边界，不把环境标识称为自然人或完全匿名。
+
+调度器只在非预览规则的非释放动作确认分发成功后，按北京时间日与观察代际发布一次发生时间；16 槽有界通道不阻塞 hook／调度器，完全失败、暂停、开总开关和清理释放均不计活动。后台宿主构造匿名事件、按会话与统计日再去重，选择变更使旧代观察与模式结果失效。hook 安装状态和调度器错误决定 runtime_ready／runtime_failed，进程存在不作为就绪证据；驱动已分发不保证游戏已收到。
+
+独立后台线程负责机器标识读取、序列化、磁盘和 HTTP，前台通过异步命令等待设置落盘；网络超时 5 秒，正常 30 秒批量，每批最多 50 条／64 KiB，队列最多 1,000 条／1 MiB／7 天。成功／重复／永久拒绝出队，单条 retry 或缺失回执保留；越界、重复下标或坏回执整批保留。超时、429、停收和服务故障以带抖动退避重试，最大 5 分钟；400／413／422 的坏批次可丢弃，不阻塞新记录。禁止请求自动重定向，避免采集正文流向其他接收端。
+
+开发构建只允许本机 HTTP，默认 Platform `http://localhost:8100/api/v1`，可用 `FLAIR_INSIGHTS_API` 指定本地基址；正式构建固定 `https://platform.xwink.fun/api/v1`。开发／正式队列隔离，协议和设置说明随代码交付，发布仍逐次授权。
 
 ## Crate 依赖图
 
@@ -63,11 +75,11 @@ DD 同键启停仍依靠事件名额与时间窗口推测来源，不能可靠�
 
 `win_input::dispatch(KeyId, is_up)` 是统一入口，按 `(mode, KeyId)` 分发到对应后端。常驻显示通用、游戏与 DD 三档；外设模式只在握手确认硬件后出现在底部菜单和设置中：
 
-| 模式                           | 实现                                                    | 说明                                                                                                                                                                                                                                         |
-| ------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SendInput（通用模式，默认）    | `win-input/src/lib.rs`                                  | 键盘 `SendInput INPUT_KEYBOARD` + `KEYEVENTF_SCANCODE`；鼠标 `INPUT_MOUSE` + `MOUSEEVENTF_*`（X1/X2 用 `MOUSEEVENTF_XDOWN/UP` + `mouseData=XBUTTON1/2`）。`dwExtraInfo = SIM_MARKER` 标记自身注入事件防循环                                  |
-| Interception（游戏模式，主推） | `win-input/src/interception.rs`                         | 键盘 + 鼠标设备各扫描一次，鼠标状态位映射 `INTERCEPTION_MOUSE_BUTTON_4/5_DOWN/UP`（X1/X2）。`interception_send` 返回写入 stroke 数，鼠标 / 滚轮失败回退 SendInput。需要安装驱动并重启，以管理员运行                                          |
-| DDSimple（DD驱动，备用）       | `win-input/src/ddsimple.rs` + `dd_common.rs`（dd63330） | 键盘 `DD_key`，鼠标走 `MOUSE_INPUT_DATA.ButtonFlags`，原生支持 X1/X2 侧键；滚轮用 DD SDK 上滚 / 下滚编码。无需重启但需管理员。`ExtraInformation` 被驱动写死为 0，`SIM_MARKER` 无法幸存，自注入回灌改由 `PENDING_INJECTIONS` 时间窗口队列过滤 |
+| 模式                           | 实现                                                    | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SendInput（通用模式，默认）    | `win-input/src/lib.rs`                                  | 键盘 `SendInput INPUT_KEYBOARD` + `KEYEVENTF_SCANCODE`；鼠标 `INPUT_MOUSE` + `MOUSEEVENTF_*`（X1/X2 用 `MOUSEEVENTF_XDOWN/UP` + `mouseData=XBUTTON1/2`）。`dwExtraInfo = SIM_MARKER` 标记自身注入事件防循环                                                                                                                                                                                                                                                               |
+| Interception（游戏模式，主推） | `win-input/src/interception.rs`                         | 键盘 + 鼠标设备各扫描一次，鼠标状态位映射 `INTERCEPTION_MOUSE_BUTTON_4/5_DOWN/UP`（X1/X2）。`interception_send` 返回写入 stroke 数，鼠标 / 滚轮失败回退 SendInput。需要安装驱动并重启，以管理员运行                                                                                                                                                                                                                                                                       |
+| DDSimple（DD驱动，备用）       | `win-input/src/ddsimple.rs` + `dd_common.rs`（dd63330） | 键盘 `DD_key`，鼠标走 `MOUSE_INPUT_DATA.ButtonFlags`，原生支持 X1/X2 侧键；滚轮用 DD SDK 上滚 / 下滚编码。无需重启但需管理员。`ExtraInformation` 被驱动写死为 0，`SIM_MARKER` 无法幸存，自注入回灌改由 `PENDING_INJECTIONS` 时间窗口队列过滤                                                                                                                                                                                                                              |
 | HidStick（外设模式）           | `win-input/src/hidstick.rs`（`serialport` crate）       | 挨个 USB 串口握手（`ID` 回 `ID xwink-hand …` 才算），跳过 CH34x / CP210x / FTDI / PL2303 等转串口芯片（常把 DTR 接到开发板复位脚，握手一拉就复位）、乐鑫的口先试；不认 VID/PID，PID 是固件自定的。一行一条指令（`KD`/`KU` 带 HID usage、`MD`/`MU`、`MW`）、逐条等 `OK`，协议以 xwink-body 仓 `firmware.md`「HID 棒固件」为准。即插即用、无需管理员。外设驱动敲出的是真硬件事件，自注入同 DD 靠 `PENDING_INJECTIONS` 过滤；不在 HID 键盘页的键（媒体键）逐条回退 SendInput |
 
 X1/X2 在 DD 模式 / 鼠标设备缺失时按 once 旗标 warn 一次后自动回退 SendInput。`dd63330.dll` 纳入打包资源、运行时完整性校验（`packages/resource-integrity`）与发版前 `pnpm check:resources`。
@@ -131,7 +143,7 @@ AltGr 布局（德语 / 法语 / 波兰语等）把右 Alt 当 AltGr，键盘驱
 
 | 数据               | 路径                                                                   | 说明                                                       |
 | ------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------- |
-| 配置文件（`.qzh`） | `{app_data_dir}/profiles-sequences/`                                   | 旧 `profiles/` 只首次复制并保留，导入／导出使用文件对话框 |
+| 配置文件（`.qzh`） | `{app_data_dir}/profiles-sequences/`                                   | 旧 `profiles/` 只首次复制并保留，导入／导出使用文件对话框  |
 | 自选提示音         | `{app_data_dir}/sounds/`                                               | 导入时复制进来，settings.json 只存文件名                   |
 | 应用设置           | `{app_data_dir}/settings.json`                                         | `tauri-plugin-store`；复用 `packages/migrate` 迁移基础设施 |
 | 兑换码许可证       | `{app_data_dir}/licenses/<码哈希>.jws`                                 | 一张码一份 billing 签发的原文，可叠加；每次查询重新验签    |

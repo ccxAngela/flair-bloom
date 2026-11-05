@@ -12,6 +12,14 @@
 
 按键助手的测试难点在于：连发依赖低级 hook（`WH_KEYBOARD_LL`/`WH_MOUSE_LL`）与驱动注入（SendInput / DD / Interception），这些跑在 OS 输入栈上、需要交互式桌面会话，传统 headless CI 跑不了。业界同类工具（[kanata](https://github.com/jtroo/kanata) 的 `simulated_input`、[PowerToys Keyboard Manager](https://github.com/microsoft/PowerToys) 的 `Input` 抽象）的共识是**分层**：能在不碰 OS 的前提下确定性验证的逻辑，全部下沉到模拟测试；真正碰 OS/驱动的那一层才手动或半自动验。
 
+## 使用统计验证
+
+`cargo test -p burst-engine -p flair-bloom --lib` 覆盖短任务成功输出、失败／预览／暂停不计活动、并发去重、北京时间跨日与采集代际，以及 Rust 队列容量／体积／7 天过期、重启恢复、关闭后迟到回执、逐项永久拒绝和重试、坏回执、HTTP 超时／限流／停收、环境标识回退与原子替换。测试使用发送替身和本机随机端口，不会向系统注入按键或向生产上报。
+
+公共回放从 Platform 所有者读取，避免在客户端复制另一版语义。PowerShell 设置 `$env:FLAIR_INSIGHTS_REPLAY='<xwink-console>/packages/nest/platform/src/insights/replay.json'` 后运行 `cargo test -p flair-bloom --lib shared_platform_replay -- --ignored`；日常测试将这条跨仓检查列为 ignored，必须单独执行才算通过。
+
+真实接入还要从设置 → 通用 → 使用统计验证关闭／重启保持与重新开启，连接开发 Platform 核对真实 SendInput 输出和一个失败路径。驱动实际发送、目标程序收到按键、后台收到匿名活动是不同证据；模拟测试不能替代 Windows 或其他通道实测。
+
 ## 三层
 
 | 层                        | 测什么                                                 | 怎么测                                   | 跑在哪                                    | 状态                                        |

@@ -29,6 +29,7 @@ impl EventDispatcher for FailOnce {
 
 fn worker(is_up: bool) -> SchedulerWorker {
     SchedulerWorker {
+        activity: Arc::new(crate::RuleActivity::channel().0),
         rules: HashMap::new(),
         target_holds: HashMap::new(),
         current_generation: 0,

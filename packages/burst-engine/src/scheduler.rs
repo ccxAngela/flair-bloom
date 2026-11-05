@@ -1,6 +1,7 @@
 #[cfg(test)]
 use crate::output_queue::hold_duration;
 use crate::output_queue::{OutputQueue, QueueAction};
+use crate::{ActivityObservation, RuleActivity};
 use qzh_profile::key_id::KeyId;
 use qzh_profile::profile::{BurstRule, MIN_EFFECTIVE_INTERVAL_MS};
 use std::collections::{hash_map::Entry, HashMap, HashSet};
@@ -105,6 +106,8 @@ enum SchedulerCommand {
 }
 
 pub struct SchedulerHandle {
+    activity: Arc<RuleActivity>,
+    activity_rx: Mutex<Option<Receiver<ActivityObservation>>>,
     tx: Sender<SchedulerCommand>,
     join: Mutex<Option<JoinHandle<()>>>,
     hp_degraded: Arc<AtomicBool>,
@@ -230,6 +233,12 @@ impl SchedulerHandle {
         let failure = Failure::default();
         let worker_failure = failure.clone();
         let failure_progress = progress.clone();
+        let (activity, activity_rx) = RuleActivity::channel();
+        let activity = Arc::new(activity);
+        let observations = WorkerObservations {
+            progress: worker_progress,
+            activity: activity.clone(),
+        };
         // panic 兜底：worker 栈一旦展开，target_holds 随之丢失，靠 simulated_keys 账本
         // 释放所有已按下的模拟键，避免按键卡死（连发工具最差故障）。
         let panic_fallback = simulated_keys.clone();
@@ -242,7 +251,7 @@ impl SchedulerHandle {
                     dispatcher,
                     stats,
                     simulated_keys,
-                    worker_progress,
+                    observations,
                 )
             }));
             if outcome.is_err() {
@@ -256,6 +265,8 @@ impl SchedulerHandle {
             }
         });
         Self {
+            activity,
+            activity_rx: Mutex::new(Some(activity_rx)),
             tx,
             join: Mutex::new(Some(join)),
             hp_degraded,
@@ -392,6 +403,9 @@ impl Drop for SchedulerHandle {
 /// 对「合成物理按键 → 引擎 → 调度命令（含 generation）」整条管线做确定性断言——
 /// 真实 [`SchedulerHandle`] 跑在真线程 + waitable timer 上，无法直接确定性测命令时序。
 pub(crate) trait Scheduler: Send + Sync {
+    fn activity(&self) -> Option<(Arc<RuleActivity>, Receiver<ActivityObservation>)> {
+        None
+    }
     fn start_rule(&self, rule: Arc<BurstRule>, generation: u64);
     fn tap_once(&self, rule: Arc<BurstRule>, generation: u64);
     fn stop_rule(&self, rule_id: String, generation: u64);
@@ -411,6 +425,13 @@ pub(crate) trait Scheduler: Send + Sync {
 }
 
 impl Scheduler for SchedulerHandle {
+    fn activity(&self) -> Option<(Arc<RuleActivity>, Receiver<ActivityObservation>)> {
+        self.activity_rx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .map(|rx| (self.activity.clone(), rx))
+    }
     fn failure(&self) -> Option<String> {
         self.failure
             .lock()
@@ -463,6 +484,11 @@ impl Scheduler for SchedulerHandle {
     }
 }
 
+struct WorkerObservations {
+    progress: ProgressMap,
+    activity: Arc<RuleActivity>,
+}
+
 fn worker_loop(
     rx: Receiver<SchedulerCommand>,
     hp_degraded: Arc<AtomicBool>,
@@ -470,7 +496,7 @@ fn worker_loop(
     dispatcher: Arc<dyn EventDispatcher>,
     stats: Option<Arc<SchedulerStats>>,
     simulated_keys: SimulatedKeys,
-    progress: ProgressMap,
+    observations: WorkerObservations,
 ) {
     let mut worker = SchedulerWorker {
         rules: HashMap::new(),
@@ -481,7 +507,8 @@ fn worker_loop(
         simulated_keys,
         min_interval_ms: MIN_EFFECTIVE_INTERVAL_MS,
         tap_seq: 0,
-        progress,
+        progress: observations.progress,
+        activity: observations.activity,
         clock: |_| Instant::now(),
         cleanup_at: None,
     };
@@ -514,6 +541,7 @@ fn worker_loop(
 }
 
 struct SchedulerWorker {
+    activity: Arc<RuleActivity>,
     /// 规则 ID 用 `Arc<str>` 而非 `String`：owner 登记到 `target_holds` 时只做引用计数
     /// 克隆，避免热路径（`process_due` 每拍 acquire/release）的 `String` 堆分配。
     rules: HashMap<Arc<str>, ScheduledRule>,
@@ -865,6 +893,13 @@ impl SchedulerWorker {
             let t0 = Instant::now();
             let event_count = events.len();
             let succeeded = self.dispatch_events(events);
+            if succeeded
+                && event_count > 0
+                && !action.is_release()
+                && !rule.source_id.starts_with('\0')
+            {
+                self.activity.record(std::time::SystemTime::now());
+            }
             let completed_at = (self.clock)(now);
             if let Some(stats) = &self.stats {
                 if event_count > 0 {
@@ -1311,6 +1346,7 @@ mod tests {
     fn test_worker() -> (SchedulerWorker, SimulatedKeys) {
         let simulated_keys = Arc::new(Mutex::new(HashMap::new()));
         let worker = SchedulerWorker {
+            activity: Arc::new(RuleActivity::channel().0),
             rules: HashMap::new(),
             target_holds: HashMap::new(),
             current_generation: 0,
@@ -1324,6 +1360,56 @@ mod tests {
             cleanup_at: None,
         };
         (worker, simulated_keys)
+    }
+
+    #[test]
+    fn activity_observes_short_real_rules_but_not_preview_or_failed_dispatch() {
+        struct FailedDispatcher;
+        impl EventDispatcher for FailedDispatcher {
+            fn dispatch(&self, events: &[InputEvent]) -> Vec<DispatchResult> {
+                vec![DispatchResult::Failed; events.len()]
+            }
+        }
+        for (id, failed, expected) in [
+            ("short", false, 1),
+            ("\0preview#1", false, 0),
+            ("failed", true, 0),
+        ] {
+            let (mut worker, _) = test_worker();
+            let (activity, rx) = RuleActivity::channel();
+            activity.set_enabled(true);
+            worker.activity = Arc::new(activity);
+            if failed {
+                worker.dispatcher = Arc::new(FailedDispatcher);
+            }
+            worker.handle_command(SchedulerCommand::Start {
+                rule: rule(id, KeyId::Keyboard(0x45)),
+                generation: 0,
+                run_id: 1,
+                once: true,
+            });
+            worker.process_due(Instant::now());
+            worker.process_due(Instant::now() + Duration::from_millis(100));
+            assert_eq!(rx.try_iter().count(), expected, "{id}");
+        }
+    }
+
+    #[test]
+    fn activity_does_not_observe_pause_stop_or_release_cleanup() {
+        let (mut worker, _) = test_worker();
+        let (activity, rx) = RuleActivity::channel();
+        activity.set_enabled(true);
+        worker.activity = Arc::new(activity);
+        worker.handle_command(SchedulerCommand::Start {
+            rule: rule("paused", KeyId::Keyboard(0x45)),
+            generation: 0,
+            run_id: 1,
+            once: false,
+        });
+        worker.pause_rule("paused", Instant::now());
+        worker.process_due(Instant::now() + Duration::from_secs(1));
+        worker.cleanup_all();
+        assert!(rx.try_recv().is_err());
     }
 
     fn rule(id: &str, target_key: KeyId) -> Arc<BurstRule> {
@@ -1443,6 +1529,7 @@ mod tests {
         let key = KeyId::Keyboard(0x45);
         simulated_keys.lock().unwrap().insert(key, 1); // 模拟失败 up 后的残留按下态
         let mut worker = SchedulerWorker {
+            activity: Arc::new(RuleActivity::channel().0),
             rules: HashMap::new(),
             target_holds: HashMap::new(),
             current_generation: 0,

@@ -1254,6 +1254,7 @@ name = "flair-bloom"
 version = "0.9.0"
 dependencies = [
  "burst-engine",
+ "chrono",
  "crypto",
  "objc2-app-kit",
  "objc2-foundation",
@@ -1274,9 +1275,11 @@ dependencies = [
  "tauri-plugin-store",
  "tauri-plugin-updater",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "uuid",
  "webview2-com",
  "win-driver",
  "win-input",

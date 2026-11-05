@@ -75,6 +75,17 @@ export const settings: TourDef = {
       prepare: (host) => host.openSettings('general'),
     },
     {
+      id: 'insights',
+      target: 'settings-general-insights',
+      title: '使用统计由你选择',
+      body: p(
+        '「帮助改进气质花」默认开启，记录版本、环境标识、启动与就绪、规则实际输出和输入模式结果，不上传按键、宏或配置名称。',
+        '环境标识可能与体系内其他产品关联，当前不关联登录账号。关闭不影响按键功能，会停止采集、清空待发队列，重启保持。',
+        '已发送的数据不会随开关删除，原始事件保留 30 天、主体日汇总 90 天，无主体日计数可长期保留。',
+      ),
+      prepare: (host) => host.openSettings('general'),
+    },
+    {
       id: 'finish',
       title: '热键跟着配置走',
       body: p(

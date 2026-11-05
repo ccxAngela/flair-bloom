@@ -66,6 +66,7 @@ impl Sim {
         let recorder = Arc::new(RecordingDispatcher::new());
         let dispatcher: Arc<dyn EventDispatcher> = recorder.clone();
         let worker = SchedulerWorker {
+            activity: Arc::new(crate::RuleActivity::channel().0),
             rules: HashMap::new(),
             target_holds: HashMap::new(),
             current_generation: 0,

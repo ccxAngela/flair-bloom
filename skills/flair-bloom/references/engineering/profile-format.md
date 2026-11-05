@@ -36,11 +36,13 @@
 | 2              | 按键字段裸 `u32` VK → `KeyId`（键盘 + 鼠标 5 键统一），可选字段 `null` 保留 | v0.2     |
 | 3              | `MouseButton` 新增 `WheelUp` / `WheelDown`                                  | v0.2.4   |
 | 4              | `BurstRule` 新增可选 `group` 字段（Toggle 互斥分组）                        | v0.2.5   |
-| 5              | 输出统一为 `steps`，完整迁移旧单键，独立配置目录保留回退数据 | v0.9.0 |
+| 5              | 输出统一为 `steps`，完整迁移旧单键，独立配置目录保留回退数据                | v0.9.0   |
 
 不升版本的默认值字段：`meta.signature`（水印署名，空串即未设置）。它在反序列化时就经 `sanitize_signature` 去控制字符、去首尾空白、截到 16 字符，导入、列表、保存所有读路径一处收口。`save_profile` 一律沿用文件里的旧值（前端自动保存每次从头拼 `meta`、不带署名），只有 `set_profile_signature` 能改，且要求持有 `flair.signature` 权益。
 
 `tauri-plugin-store` 的 `settings.json` 复用同一迁移基础设施。已知键：`closeBehavior`、`holdInGroupHintDismissed`（某组变成长按与切换混排时的插队提示已勾「不再提示」）、`membershipAgreedVersion`（上次兑换时同意的会员服务协议版本，再兑换时版本没变就默认勾选）、`sound`、`theme`、`layout`、`autoUpdate`（与后端 `bootstrap/update.rs` 同名同读）、`autoEnableOnStart`（与 `bootstrap/startup.rs` 同名同读）、`tours`（`{ completed: string[], introVersion: string }`，`introVersion` 是已自动展示过的教程版本，与协议版本同一套语义）、`runAsAdmin`（「以管理员模式启动」的用户意图，注册表标志被更新抹掉时靠它自愈）、当前激活配置路径。开机自启与「以管理员模式启动」不在这里：前者由 `tauri-plugin-autostart` 写 `HKCU\Run`，后者写 `HKCU\...\AppCompatFlags\Layers`，都以注册表为准，界面只读回显。
+
+`usageInsightsEnabled` 是 Rust 宿主统一读写的使用统计选择，未设置默认开启，读取设置失败时停止统计；面板只经统计命令修改，不直接写 store。关闭选择不随配置切换、重启或升级复位。统计队列与环境回退文件独立于 `.qzh`，开发构建位于应用数据目录 `insights-development/`，正式构建位于 `insights/`；格式和保留边界见[架构](architecture.md#使用统计)。
 
 ## 输入约束
 
@@ -49,7 +51,7 @@
 | 连发间隔（结构下限） | 1ms – 10000ms                         | `qzh-profile/src/profile.rs::validate()`（默认 10ms）                  |
 | 连发间隔（有效下限） | ≥ 10ms（`MIN_EFFECTIVE_INTERVAL_MS`） | 加载时 `Profile::clamp_intervals()` 钳位 + `burst-engine` 运行时 floor |
 | 单配置规则数         | ≤ 64                                  | `profile.rs::validate()`                                               |
-| 规则输出步骤数       | 1～256                                | `profile.rs::MAX_OUTPUT_STEPS` 与规则结构校验 |
+| 规则输出步骤数       | 1～256                                | `profile.rs::MAX_OUTPUT_STEPS` 与规则结构校验                          |
 
 约束在 `qzh-profile` 校验层执行，不依赖前端；按键合法性不在 `validate()` 里查，见 [key-policy](key-policy.md)。
 

@@ -433,6 +433,8 @@ export default function PanelApp() {
   } | null>(null);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
   const [autoUpdate, setAutoUpdate] = useState(true);
+  const [insightsEnabled, setInsightsEnabled] = useState(false);
+  const [togglingInsights, setTogglingInsights] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateDownloadProgress | null>(null);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const [globalEnabled, setGlobalEnabled] = useState(false);
@@ -883,6 +885,9 @@ export default function PanelApp() {
   ]);
 
   useEffect(() => {
+    invoke<boolean>('get_insights_enabled')
+      .then(setInsightsEnabled)
+      .catch(() => {});
     settingsStore
       .get<boolean>(AUTO_UPDATE_KEY)
       .then((v) => {
@@ -2595,6 +2600,18 @@ export default function PanelApp() {
       .catch(() => toast.warning('保存自动更新设置失败'));
   }
 
+  async function handleToggleInsights(next: boolean) {
+    setTogglingInsights(true);
+    try {
+      setInsightsEnabled(await invoke<boolean>('set_insights_enabled', { enabled: next }));
+    } catch {
+      setInsightsEnabled(await invoke<boolean>('get_insights_enabled').catch(() => false));
+      toast.warning('保存使用统计设置失败，请重试');
+    } finally {
+      setTogglingInsights(false);
+    }
+  }
+
   // 标题栏提示：已下好就直接开弹窗，只是查到新版本则走一次手动检查（必定下载）
   function handleUpdateIndicator() {
     if (updateReady) {
@@ -3376,6 +3393,9 @@ export default function PanelApp() {
           autoEnableOnStart={autoEnableOnStart}
           runAsAdmin={sysInfo.run_as_admin}
           autoUpdate={autoUpdate}
+          insightsEnabled={insightsEnabled}
+          togglingInsights={togglingInsights}
+          onToggleInsights={(next) => void handleToggleInsights(next)}
           togglingAutostart={togglingAutostart}
           togglingRunAsAdmin={togglingRunAsAdmin}
           sound={sound}

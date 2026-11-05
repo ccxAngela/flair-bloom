@@ -83,6 +83,9 @@ interface Props {
   runAsAdmin: boolean;
   togglingRunAsAdmin: boolean;
   autoUpdate: boolean;
+  insightsEnabled: boolean;
+  togglingInsights: boolean;
+  onToggleInsights: (next: boolean) => void;
   sound: SoundSettings;
   availableVoices: string[];
   profiles: SettingsProfileEntry[];
@@ -621,6 +624,28 @@ export default function SettingsDialog(props: Props) {
                   aria-label="自动更新"
                 />
               </div>
+            </SettingsSection>
+
+            <SettingsSection title="使用统计" dataTour="settings-general-insights">
+              <div className="settings-row">
+                <div className="settings-row-main">
+                  <span className="settings-row-title">帮助改进气质花</span>
+                  <span className="settings-row-desc">
+                    默认开启，记录版本、启动与就绪、规则实际输出和输入模式结果。使用系统机器标识关联同一环境的使用记录，不上传按键、宏、配置名或其他正文。关闭不影响按键功能，并清空本机待发记录。
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  className="enable-checkbox"
+                  aria-label="帮助改进气质花"
+                  checked={props.insightsEnabled}
+                  disabled={props.togglingInsights}
+                  onChange={(event) => props.onToggleInsights(event.target.checked)}
+                />
+              </div>
+              <p className="settings-row-desc">
+                系统标识读取失败时使用本机随机标识；记录可能与体系内使用相同环境标识的其他产品关联。当前不关联登录账号。已接收的数据不会因关闭而删除，正在发送的请求可能完成。
+              </p>
             </SettingsSection>
 
             <SettingsSection title="输入模式">

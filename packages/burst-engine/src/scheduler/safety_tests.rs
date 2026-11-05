@@ -33,6 +33,7 @@ impl EventDispatcher for ReleaseFailure {
 
 fn worker(dispatcher: Arc<dyn EventDispatcher>) -> SchedulerWorker {
     SchedulerWorker {
+        activity: Arc::new(crate::RuleActivity::channel().0),
         rules: HashMap::new(),
         target_holds: HashMap::new(),
         current_generation: 0,

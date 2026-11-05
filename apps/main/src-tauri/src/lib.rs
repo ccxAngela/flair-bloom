@@ -10,6 +10,7 @@ use tracing::info;
 mod bootstrap;
 mod commands;
 mod engine;
+mod insights;
 mod tray;
 
 use bootstrap::{
@@ -241,10 +242,13 @@ pub fn run() {
             import_sound_file,
             read_sound_file,
             delete_sound_file,
+            insights::get_insights_enabled,
+            insights::set_insights_enabled,
         ])
         .setup(move |app| {
             bootstrap::webview_scale::setup(app.handle());
             app.manage(LicenseState::load(app.handle()));
+            insights::setup(app.handle(), burst_engine.clone());
 
             // hook 只入队，全局开关与规则通知在同一通道串行派发，避免语音乱序。
             // emit/tray 不能在 hook 线程执行，否则 WebView STA 可能死锁。
@@ -341,6 +345,9 @@ pub fn run() {
         .expect("error while building FlairBloom")
         .run(move |_app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(insights) = _app.try_state::<insights::InsightsState>() {
+                    insights.shutdown();
+                }
                 engine_for_exit.shutdown();
             }
         });
