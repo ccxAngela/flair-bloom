@@ -3,7 +3,7 @@
 use tauri_plugin_store::StoreExt;
 use tracing::warn;
 
-pub const AGREEMENT_VERSION: &str = "1.5";
+pub const AGREEMENT_VERSION: &str = "1.6";
 
 /// 检查是否需要展示协议弹窗。返回 `true` 表示需要（未同意或版本不符）。
 pub fn check_agreement(app: &tauri::AppHandle) -> bool {

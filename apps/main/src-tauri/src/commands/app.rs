@@ -103,7 +103,9 @@ pub fn agree_license(app: AppHandle) -> Result<(), String> {
         "app_version_at_agree",
         serde_json::json!(env!("CARGO_PKG_VERSION")),
     );
-    store.save().map_err(|e| format!("保存协议状态失败: {e}"))
+    store.save().map_err(|e| format!("保存协议状态失败: {e}"))?;
+    crate::insights::activate(&app);
+    Ok(())
 }
 
 /// 这次启动该不该按设置自动开全局，判定见 [`crate::bootstrap::startup::should_auto_enable_on_start`]。

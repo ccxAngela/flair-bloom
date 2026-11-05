@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - 'apps/site/**'
+      - 'apps/main/src/assets/EULA.md'
       - 'apps/main/src/windows/panel/theme.ts'
       - 'apps/main/src/windows/panel/components/markdown-parse.ts'
       - 'apps/main/src/windows/panel/jx3/**'
@@ -15,6 +16,7 @@ on:
     branches: [main]
     paths:
       - 'apps/site/**'
+      - 'apps/main/src/assets/EULA.md'
       - 'apps/main/src/windows/panel/theme.ts'
       - 'apps/main/src/windows/panel/components/markdown-parse.ts'
       - 'apps/main/src/windows/panel/jx3/**'

@@ -117,6 +117,7 @@ const glowCycle = `${((highlights.length + 1) * GLOW_STAGGER).toFixed(1)}s`;
               <h1 class="mt-3 text-4xl font-bold tracking-tight text-(--ui-fg-strong) sm:text-5xl">
                 气质花按键助手
               </h1>
+              <ProductUsage />
             </XReveal>
             <XReveal :delay="120">
               <p class="mt-4 max-w-xl text-lg text-(--ui-fg-muted)">

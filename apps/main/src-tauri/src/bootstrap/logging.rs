@@ -64,6 +64,10 @@ pub fn init(dir: &PathBuf) {
     let crash_dir = dir.clone();
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if crate::insights::is_worker_thread() {
+            tracing::warn!("使用统计观察发生故障，已隔离");
+            return;
+        }
         let ts = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()

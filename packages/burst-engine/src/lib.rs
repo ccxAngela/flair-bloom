@@ -1,6 +1,4 @@
-mod activity;
 mod output_queue;
-pub use activity::{ActivityObservation, RuleActivity};
 mod recorder;
 mod rules;
 pub use recorder::RecordingSnapshot;
@@ -178,7 +176,6 @@ impl RuntimeState {
 }
 
 pub struct BurstEngine {
-    listener_status: AtomicU64,
     pub global_enabled: Arc<AtomicBool>,
     rules: Arc<Mutex<RuleSnapshot>>,
     runtime: Arc<Mutex<RuntimeState>>,
@@ -233,7 +230,6 @@ impl BurstEngine {
 
     fn from_parts(scheduler: Arc<dyn Scheduler>, simulated_keys: SimulatedKeys) -> Self {
         Self {
-            listener_status: AtomicU64::new(0),
             global_enabled: Arc::new(AtomicBool::new(false)),
             rules: Arc::new(Mutex::new(RuleSnapshot::default())),
             runtime: Arc::new(Mutex::new(RuntimeState {
@@ -275,24 +271,6 @@ impl BurstEngine {
         };
         self.dedicated_stop.store(dedicated, Ordering::Relaxed);
         *revive(self.hotkeys.lock()) = hotkeys;
-    }
-
-    pub fn observe_rule_activity(
-        &self,
-    ) -> Option<(
-        Arc<RuleActivity>,
-        std::sync::mpsc::Receiver<ActivityObservation>,
-    )> {
-        self.scheduler.activity()
-    }
-
-    /// None 为尚未取得 hook 安装结果；部分 hook 失败也不能声称运行面完整就绪。
-    pub fn listener_ready(&self) -> Option<bool> {
-        match self.listener_status.load(Ordering::SeqCst) {
-            0 => None,
-            1 => Some(true),
-            _ => Some(false),
-        }
     }
 
     /// 兼容旧调用名：停止所有活动规则，并等待 scheduler 完成目标键释放。
@@ -1152,7 +1130,6 @@ pub fn start_listener(engine: Arc<BurstEngine>) {
     {
         let mut guard = ENGINE_HOOK.write().unwrap_or_else(|e| e.into_inner());
         if guard.as_ref().and_then(|w| w.upgrade()).is_some() {
-            engine.listener_status.store(2, Ordering::SeqCst);
             error!("start_listener 重复调用：旧引擎仍存活，忽略以防双重 hook");
             return;
         }
@@ -1173,7 +1150,6 @@ pub fn start_listener(engine: Arc<BurstEngine>) {
             )
         };
         if kbd_hook.is_null() {
-            engine.listener_status.store(2, Ordering::SeqCst);
             error!("安装键盘 hook 失败");
             return;
         }
@@ -1188,9 +1164,6 @@ pub fn start_listener(engine: Arc<BurstEngine>) {
         } else {
             info!("鼠标 hook 已安装");
         }
-        engine
-            .listener_status
-            .store(if mouse_hook.is_null() { 2 } else { 1 }, Ordering::SeqCst);
 
         // WH_KEYBOARD_LL / WH_MOUSE_LL 都要求安装线程持续运行消息循环，
         // 否则 Windows 会在超时后移除 hook
@@ -1246,8 +1219,7 @@ pub fn start_listener(engine: Arc<BurstEngine>) {
 }
 
 #[cfg(not(windows))]
-pub fn start_listener(engine: Arc<BurstEngine>) {
-    engine.listener_status.store(2, Ordering::SeqCst);
+pub fn start_listener(_engine: Arc<BurstEngine>) {
     info!("连发引擎监听器（当前平台暂不支持键盘 hook）");
 }
 

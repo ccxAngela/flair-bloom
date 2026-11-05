@@ -34,6 +34,9 @@ pub struct Identity {
 #[serde(rename_all = "snake_case")]
 pub enum EventName {
     SessionStarted,
+    SessionEnded,
+    SessionUsage,
+    LayoutObserved,
     RuntimeReady,
     RuntimeFailed,
     RuleActivity,
@@ -79,6 +82,21 @@ impl Event {
             && self.identity.state == "anonymous"
             && text(&self.identity.segment_id, 128)
             && match self.name {
+                EventName::SessionUsage => {
+                    self.fields.len() == 1
+                        && self.fields.get("durationMs").is_some_and(|v| {
+                            (v == "0"
+                                || (!v.starts_with('0') && v.bytes().all(|c| c.is_ascii_digit())))
+                                && v.parse::<u64>().is_ok_and(|ms| ms <= 86_400_000)
+                        })
+                }
+                EventName::LayoutObserved => {
+                    self.fields.len() == 1
+                        && self
+                            .fields
+                            .get("layout")
+                            .is_some_and(|v| matches!(v.as_str(), "vertical" | "horizontal"))
+                }
                 EventName::RuntimeFailed => {
                     self.fields.len() == 1
                         && self.fields.get("reason").is_some_and(|v| {
@@ -172,6 +190,7 @@ impl Collector {
         collector
     }
 
+    #[cfg(test)]
     pub fn toggle(&mut self, enabled: bool, environment: Option<Environment>, now: i64) {
         self.enabled = enabled;
         self.environment = if enabled { environment } else { None };
@@ -210,6 +229,17 @@ impl Collector {
             fields,
         };
         if event.valid() {
+            if name == EventName::SessionUsage {
+                let day = (now + 8 * 3_600_000).div_euclid(86_400_000);
+                // 离线只需保留会话每天的最新累计，避免分钟检查点挤掉启动事件。
+                self.queue.items.retain(|old| {
+                    old.name != name
+                        || old.session_id != event.session_id
+                        || old
+                            .time()
+                            .is_none_or(|at| (at + 8 * 3_600_000).div_euclid(86_400_000) != day)
+                });
+            }
             if name == EventName::RuleActivity {
                 let day = (now + 8 * 3_600_000).div_euclid(86_400_000);
                 if !self.activity_days.insert(day) {

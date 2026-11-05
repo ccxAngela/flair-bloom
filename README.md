@@ -83,7 +83,7 @@
 
 更细的操作放在应用内教程和[使用说明书](skills/flair-bloom/SKILL.md)中；版本变化见 [CHANGELOG](CHANGELOG.md)。
 
-配置和按键正文留在本机。最小使用统计默认开启，记录环境标识、版本与固定活动结果，可在「设置 → 通用 → 使用统计」关闭；关闭清空待发队列、不影响按键功能，详细范围与保留期见[用户协议](apps/main/src/assets/EULA.md#七使用统计与数据)。
+配置和按键正文留在本机。统计随运行记录启动、正常退出、运行时长和横竖布局，不提供独立关闭入口；与引擎输出隔离。公开统计只显示累计数字，实际标识、用途和保留期见[用户协议](apps/main/src/assets/EULA.md#七使用统计与数据)。
 
 ## 接下来
 
@@ -94,7 +94,7 @@
 - 外设模式支持同键切换连发和横版键鼠图（[路线图](docs/roadmaps/hid-stick.md)）。
 - 配置文件被外部改动后自动重新加载。
 - 官网补实拍截图和站内反馈入口。
-- 产品使用统计本地闭环已通过，接下来准备发布；反馈与手动诊断仍为候选（[接入记录](docs/roadmaps/product-insights.md)）。
+- 产品使用统计的宿主轻量采集、统一配置与官网累计已完成本地验收，本轮未发布；后续先部署 Platform，再发布桌面与官网（[接入记录](docs/roadmaps/product-insights.md)）。
 - 桌宠随连发和键鼠／手柄输入做动画反馈（[设计稿](docs/roadmaps/pet-mode.md)）。
 - 界面迁到 Vue 与 xwink 组件库（[路线图](docs/roadmaps/vue-migration.md)）。
 - 按键队列与录制的 Windows 四通道真机验收：实现与自动化已完成，组合键独立评估（[实施记录](docs/roadmaps/output-sequences.md)）。

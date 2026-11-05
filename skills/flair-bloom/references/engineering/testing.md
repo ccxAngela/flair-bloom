@@ -14,11 +14,11 @@
 
 ## 使用统计验证
 
-`cargo test -p burst-engine -p flair-bloom --lib` 覆盖短任务成功输出、失败／预览／暂停不计活动、并发去重、北京时间跨日与采集代际，以及 Rust 队列容量／体积／7 天过期、重启恢复、关闭后迟到回执、逐项永久拒绝和重试、坏回执、HTTP 超时／限流／停收、环境标识回退与原子替换。测试使用发送替身和本机随机端口，不会向系统注入按键或向生产上报。
+`cargo test -p burst-engine -p flair-bloom --lib` 覆盖原有引擎回归、宿主时长跨日与累计检查点合并、同源服务路径、队列条数／体积／7 天过期、重启恢复、逐项拒绝和重试、坏回执、HTTP 超时／限流／停收、环境回退与原子替换。内部停用测试只验证生命周期隔离，不代表存在用户关闭 API。使用发送替身和本机随机端口，不向系统注入按键或向生产上报。
 
 公共回放从 Platform 所有者读取，避免在客户端复制另一版语义。PowerShell 设置 `$env:FLAIR_INSIGHTS_REPLAY='<xwink-console>/packages/nest/platform/src/insights/replay.json'` 后运行 `cargo test -p flair-bloom --lib shared_platform_replay -- --ignored`；日常测试将这条跨仓检查列为 ignored，必须单独执行才算通过。
 
-真实接入还要从设置 → 通用 → 使用统计验证关闭／重启保持与重新开启，连接开发 Platform 核对真实 SendInput 输出和一个失败路径。驱动实际发送、目标程序收到按键、后台收到匿名活动是不同证据；模拟测试不能替代 Windows 或其他通道实测。
+真实接入核对协议同意前不读取统计环境、启动／退出检查点、跨日时长、横竖布局及无关闭入口；同版本更新清单也须下发配置。用本机 bootstrap 连接开发 Platform，断网和服务故障时原有功能继续。引擎路径无统计调用；按键驱动可用性仍由独立输入测试验证。
 
 ## 三层
 

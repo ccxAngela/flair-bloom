@@ -66,6 +66,7 @@ fn resolve_environment(
         };
     }
     if let Some(existing) = path
+        .filter(|path| std::fs::metadata(path).is_ok_and(|meta| meta.len() <= 4096))
         .and_then(|path| std::fs::read(path).ok())
         .and_then(|data| serde_json::from_slice::<Environment>(&data).ok())
         .filter(|env| {

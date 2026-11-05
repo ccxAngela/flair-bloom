@@ -17,6 +17,21 @@ pub fn client() -> Option<reqwest::Client> {
         .ok()
 }
 
+pub async fn bootstrap(client: &reqwest::Client, endpoint: &str) -> Option<serde_json::Value> {
+    let mut response = client.get(endpoint).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len() + chunk.len() > 16_384 {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).ok()
+}
+
 pub async fn deliver(client: &reqwest::Client, endpoint: &str, batch: &[Event]) -> Delivery {
     match client
         .post(endpoint)
@@ -95,6 +110,55 @@ mod tests {
     async fn receipt_keeps_partial_item_statuses() {
         let Delivery::Receipt(receipt) = send("200 OK", r#"{"items":[{"index":0,"status":"accepted"},{"index":1,"status":"retry","code":"unavailable"}]}"#).await else { panic!("应解析逐项回执") };
         assert_eq!(receipt.items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_is_a_bounded_bodyless_request_without_credentials() {
+        for (status, body, valid) in [
+            (
+                "200 OK",
+                r#"{"services":{"schemaVersion":1}}"#.to_string(),
+                true,
+            ),
+            ("200 OK", " ".repeat(16_385), false),
+            ("200 OK", "bad html".to_string(), false),
+            ("503 Service Unavailable", "{}".to_string(), false),
+            ("302 Found", "{}".to_string(), false),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!(
+                "http://{}/client-bootstrap/flair-bloom",
+                listener.local_addr().unwrap()
+            );
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 2048];
+                while !request.ends_with(b"\r\n\r\n") {
+                    let size = socket.read(&mut buffer).unwrap();
+                    if size == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..size]);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with("GET /client-bootstrap/flair-bloom "));
+                assert!(!request.to_ascii_lowercase().contains("authorization:"));
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(reply.as_bytes());
+            });
+            assert_eq!(
+                bootstrap(&client().unwrap(), &endpoint).await.is_some(),
+                valid
+            );
+            server.join().unwrap();
+        }
     }
 
     #[tokio::test]

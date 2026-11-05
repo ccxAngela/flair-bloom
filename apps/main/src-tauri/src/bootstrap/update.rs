@@ -198,7 +198,8 @@ pub async fn check_with_fallback(
 ) -> Result<Option<tauri_plugin_updater::Update>, String> {
     let mut last_error = None;
     for endpoint in configured_update_endpoints(app)? {
-        let updater = match build_updater_for(app, endpoint.clone()) {
+        let newer = std::sync::Arc::new(AtomicBool::new(false));
+        let updater = match build_updater_for(app, endpoint.clone(), newer.clone()) {
             Ok(updater) => updater,
             Err(e) => {
                 last_error = Some(e);
@@ -206,7 +207,12 @@ pub async fn check_with_fallback(
             }
         };
         match updater.check().await {
-            Ok(update) => return Ok(update),
+            Ok(update) => {
+                if let Some(update) = &update {
+                    crate::insights::receive_services(app, &endpoint, &update.raw_json);
+                }
+                return Ok(update.filter(|_| newer.load(Ordering::SeqCst)));
+            }
             Err(e) => {
                 warn!("更新端点 {} 不可用: {}", endpoint, e);
                 last_error = Some(format!("{e}"));
@@ -219,16 +225,41 @@ pub async fn check_with_fallback(
 fn build_updater_for(
     app: &tauri::AppHandle,
     endpoint: tauri::Url,
+    newer: std::sync::Arc<AtomicBool>,
 ) -> Result<tauri_plugin_updater::Updater, String> {
+    let mut manifest = endpoint;
+    manifest.query_pairs_mut().append_pair("updates", "1");
     app.updater_builder()
-        .endpoints(vec![endpoint])
+        .version_comparator(move |current, release| {
+            newer.store(release.version > current, Ordering::SeqCst);
+            // 同版本也读取服务配置；下载决策仍只接受严格更新的版本。
+            true
+        })
+        .timeout(Duration::from_secs(12))
+        .endpoints(vec![manifest])
         .map_err(|e| format!("{e}"))?
         .build()
         .map_err(|e| format!("{e}"))
 }
 
-/// `tauri.conf.json` 里的端点顺序就是兜底顺序：第一条代理后的清单地址、第二条 GitHub 原始地址。
-fn configured_update_endpoints(app: &tauri::AppHandle) -> Result<Vec<tauri::Url>, String> {
+/// 客户端只配置第一方入口，发布清单镜像由服务端解析。
+pub(crate) fn configured_update_endpoints(
+    app: &tauri::AppHandle,
+) -> Result<Vec<tauri::Url>, String> {
+    #[cfg(debug_assertions)]
+    if let Ok(value) = std::env::var("FLAIR_BOOTSTRAP_URL") {
+        let url = tauri::Url::parse(&value).map_err(|_| "无效的本地配置入口".to_string())?;
+        if url.scheme() != "http"
+            || !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("开发配置入口只允许本机 HTTP".into());
+        }
+        return Ok(vec![url]);
+    }
     let config = app.config();
     let endpoints = config
         .plugins
@@ -425,23 +456,20 @@ mod tests {
         assert_eq!(proxy_github_url(&url, "https://gh-proxy.com/"), url);
     }
 
-    /// `check_with_fallback` 按配置顺序逐条试，所以两条端点必须是同一份清单的
-    /// 「代理版 + 原始版」：少了第二条，代理挂掉就没有兜底；两条指向不同清单会出现版本漂移。
     #[test]
-    fn configured_endpoints_are_proxy_then_direct() {
+    fn configured_endpoint_is_the_single_first_party_bootstrap() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         let endpoints = config["plugins"]["updater"]["endpoints"]
             .as_array()
             .expect("updater.endpoints 必须存在");
 
-        assert_eq!(endpoints.len(), 2, "端点应为「代理 + 直连」两条");
-        let direct = endpoints[1].as_str().unwrap();
-        assert!(direct.starts_with("https://github.com/"), "第二条应是直连");
         assert_eq!(
-            endpoints[0].as_str().unwrap(),
-            format!("{DEFAULT_GITHUB_PROXY}{direct}"),
-            "第一条应是同一清单的代理版"
+            endpoints,
+            &serde_json::json!(["https://platform.xwink.fun/api/v1/client-bootstrap/flair-bloom"])
+                .as_array()
+                .unwrap()
+                .clone()
         );
     }
 }

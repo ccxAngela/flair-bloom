@@ -12,6 +12,43 @@ fn environment() -> Environment {
 fn collector() -> Collector {
     Collector::new(true, Some(environment()), QueueFile::default(), NOW)
 }
+
+#[test]
+fn usage_checkpoints_coalesce_per_session_day_without_erasing_start_or_layout() {
+    let mut core = collector();
+    core.record(EventName::SessionStarted, BTreeMap::new(), NOW);
+    core.record(
+        EventName::LayoutObserved,
+        BTreeMap::from([("layout".into(), "horizontal".into())]),
+        NOW,
+    );
+    for duration in [1000, 2000, 3000] {
+        core.record(
+            EventName::SessionUsage,
+            BTreeMap::from([("durationMs".into(), duration.to_string())]),
+            NOW + duration,
+        );
+    }
+    assert_eq!(core.queue.items.len(), 3);
+    assert_eq!(
+        core.queue.items.back().unwrap().fields["durationMs"],
+        "3000"
+    );
+    for value in ["-1", "01", "+1", "86400001", "1.5"] {
+        core.record(
+            EventName::SessionUsage,
+            BTreeMap::from([("durationMs".into(), value.into())]),
+            NOW,
+        );
+    }
+    assert_eq!(core.queue.items.len(), 3);
+    core.record(
+        EventName::SessionUsage,
+        BTreeMap::from([("durationMs".into(), "500".into())]),
+        NOW + 86_400_000,
+    );
+    assert_eq!(core.queue.items.len(), 4);
+}
 fn receipt(statuses: &[ReceiptStatus]) -> Receipt {
     Receipt {
         items: statuses

@@ -18,7 +18,6 @@ pub fn init_input_backend(app: &tauri::AppHandle) {
             .as_deref()
             .and_then(InputMode::from_str);
         init_backend(InputMode::SendInput);
-        crate::insights::InsightsState::mode_result(app, "sendinput", "none");
 
         if let Some(mode) = cli_mode {
             if let Ok(store) = app.store(crate::STORE_PATH) {
@@ -85,8 +84,6 @@ pub fn on_hid_stick_backend_up(app: &tauri::AppHandle) {
 /// 外设模式下心跳或下发失败（链路断了，外设驱动未必拔了）。
 #[cfg(windows)]
 pub fn on_hid_stick_link_lost(app: &tauri::AppHandle) {
-    crate::insights::InsightsState::mode_result(app, "hidstick", "unavailable");
-    crate::insights::InsightsState::mode_result(app, "sendinput", "none");
     set_hid_stick_connected(app, false);
 }
 

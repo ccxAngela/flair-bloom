@@ -1,376 +1,337 @@
 mod core;
+mod lifecycle;
 mod storage;
 mod transport;
 
 use self::core::{Collector, EventName};
-use crate::engine::BurstEngine;
-use burst_engine::{ActivityObservation, RuleActivity};
 use std::collections::BTreeMap;
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc::{sync_channel, Receiver, SyncSender},
-    Arc,
-};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, State};
-use tauri_plugin_store::StoreExt;
-use tokio::sync::oneshot;
+use tauri::{AppHandle, Manager};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-const ENABLED_KEY: &str = "usageInsightsEnabled";
-
+const THREAD_NAME: &str = "usage-insights";
 enum Command {
-    Toggle(bool, oneshot::Sender<Result<bool, String>>),
-    Mode {
-        generation: u64,
-        mode: &'static str,
-        reason: &'static str,
-        occurred_at: i64,
-    },
-    Shutdown,
+    Activate,
+    Layout(String),
+    Services(serde_json::Value),
+    Shutdown(std::sync::mpsc::SyncSender<()>),
 }
-
 pub struct InsightsState {
-    tx: SyncSender<Command>,
-    enabled: Arc<AtomicBool>,
-    generation: Arc<AtomicU64>,
+    tx: Sender<Command>,
 }
-
 impl InsightsState {
-    pub fn mode_result(app: &AppHandle, mode: &'static str, reason: &'static str) {
-        if let Some(state) = app.try_state::<Self>() {
-            let generation = state.generation.load(Ordering::SeqCst);
-            if state.enabled.load(Ordering::SeqCst) {
-                let _ = state.tx.try_send(Command::Mode {
-                    generation,
-                    mode,
-                    reason,
-                    occurred_at: chrono::Utc::now().timestamp_millis(),
-                });
-            }
-        }
-    }
-
     pub fn shutdown(&self) {
-        let _ = self.tx.try_send(Command::Shutdown);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        if self.tx.try_send(Command::Shutdown(tx)).is_ok() {
+            // 退出总预算固定，断网和后台重试不能延长产品退出。
+            let _ = rx.recv_timeout(Duration::from_millis(100));
+        }
+    }
+}
+pub fn is_worker_thread() -> bool {
+    std::thread::current().name() == Some(THREAD_NAME)
+}
+
+pub fn activate(app: &AppHandle) {
+    if let Some(state) = app.try_state::<InsightsState>() {
+        let _ = state.tx.try_send(Command::Activate);
     }
 }
 
 #[tauri::command]
-pub fn get_insights_enabled(state: State<InsightsState>) -> bool {
-    state.enabled.load(Ordering::SeqCst)
-}
-
-#[tauri::command]
-pub async fn set_insights_enabled(
-    state: State<'_, InsightsState>,
-    enabled: bool,
-) -> Result<bool, String> {
-    let (tx, rx) = oneshot::channel();
-    state
-        .tx
-        .try_send(Command::Toggle(enabled, tx))
-        .map_err(|_| "统计设置暂不可用，请稍后重试".to_string())?;
-    rx.await
-        .map_err(|_| "统计设置暂不可用，请稍后重试".to_string())?
-}
-
-pub fn setup(app: &AppHandle, engine: Arc<BurstEngine>) {
-    let enabled = app
-        .store(crate::STORE_PATH)
-        .map(|store| {
-            store
-                .get(ENABLED_KEY)
-                .is_none_or(|value| value.as_bool().unwrap_or(false))
-        })
-        .unwrap_or(false);
-    let enabled_state = Arc::new(AtomicBool::new(enabled));
-    let generation = Arc::new(AtomicU64::new(1));
-    let (tx, rx) = sync_channel(64);
-    app.manage(InsightsState {
-        tx,
-        enabled: enabled_state.clone(),
-        generation: generation.clone(),
-    });
-    let app = app.clone();
-    let status = enabled_state.clone();
-    let thread_status = status.clone();
-    let result = std::thread::Builder::new()
-        .name("usage-insights".into())
-        .spawn(move || {
-            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            else {
-                thread_status.store(false, Ordering::SeqCst);
-                return;
-            };
-            runtime.block_on(run(app, engine, enabled_state, generation, rx));
-        });
-    if result.is_err() {
-        status.store(false, Ordering::SeqCst);
-        tracing::warn!("使用统计后台未能启动，不影响按键功能");
+pub fn observe_panel_layout(app: AppHandle, layout: String) {
+    if matches!(layout.as_str(), "vertical" | "horizontal") {
+        if let Some(state) = app.try_state::<InsightsState>() {
+            let _ = state.tx.try_send(Command::Layout(layout));
+        }
     }
 }
 
-struct Worker {
-    app: AppHandle,
-    engine: Arc<BurstEngine>,
-    core: Collector,
-    enabled: Arc<AtomicBool>,
-    generation: Arc<AtomicU64>,
-    paths: Option<storage::Paths>,
-    activity: Option<(Arc<RuleActivity>, Receiver<ActivityObservation>)>,
-    activity_generation: u64,
-    runtime_reported: bool,
-    dirty: bool,
-}
-
-impl Worker {
-    fn persist(&mut self) {
-        if !self.dirty {
-            return;
+pub fn receive_services(app: &AppHandle, source: &tauri::Url, raw: &serde_json::Value) {
+    let services = &raw["services"];
+    if service_endpoint(source, services).is_some() {
+        if let Some(state) = app.try_state::<InsightsState>() {
+            let _ = state.tx.try_send(Command::Services(services.clone()));
         }
-        if let Some(paths) = &self.paths {
-            if storage::write_json(&paths.queue, &self.core.queue).is_err() {
-                return;
-            }
-        }
-        self.dirty = false;
-    }
-
-    fn observe(&mut self) {
-        if let Some((_, rx)) = &self.activity {
-            for observation in rx.try_iter() {
-                if self.core.enabled && observation.generation == self.activity_generation {
-                    let now = chrono::DateTime::<chrono::Utc>::from(observation.occurred_at)
-                        .timestamp_millis();
-                    self.core
-                        .record(EventName::RuleActivity, BTreeMap::new(), now);
-                    self.dirty = true;
-                }
-            }
-        }
-        if !self.core.enabled || self.runtime_reported {
-            return;
-        }
-        let now = chrono::Utc::now().timestamp_millis();
-        let failure = if self.engine.output_error().is_some() {
-            Some("unavailable")
-        } else if self.engine.listener_ready() == Some(false) {
-            Some(if cfg!(windows) {
-                "initialization"
-            } else {
-                "unsupported"
-            })
-        } else {
-            None
-        };
-        if let Some(reason) = failure {
-            self.core.record(
-                EventName::RuntimeFailed,
-                BTreeMap::from([("reason".into(), reason.into())]),
-                now,
-            );
-        } else if self.engine.listener_ready() == Some(true) {
-            self.core
-                .record(EventName::RuntimeReady, BTreeMap::new(), now);
-        } else {
-            return;
-        }
-        self.runtime_reported = true;
-        self.dirty = true;
-    }
-
-    fn toggle(&mut self, enabled: bool) -> Result<bool, String> {
-        if enabled != self.core.enabled {
-            self.generation.fetch_add(1, Ordering::SeqCst);
-        }
-        // 先停观察再写选择，保存失败也不继续采集；只有明确保存开启后才重新获取环境标识。
-        if !enabled {
-            self.enabled.store(false, Ordering::SeqCst);
-            if let Some((activity, _)) = &self.activity {
-                self.activity_generation = activity.set_enabled(false);
-            }
-            self.core
-                .toggle(false, None, chrono::Utc::now().timestamp_millis());
-            self.dirty = true;
-            self.persist();
-        }
-        let store = self
-            .app
-            .store(crate::STORE_PATH)
-            .map_err(|_| "保存使用统计设置失败".to_string())?;
-        store.set(ENABLED_KEY, enabled);
-        store
-            .save()
-            .map_err(|_| "保存使用统计设置失败".to_string())?;
-        if enabled && !self.core.enabled {
-            let environment =
-                storage::environment(self.paths.as_ref().map(|paths| paths.environment.as_path()));
-            let now = chrono::Utc::now().timestamp_millis();
-            self.core.toggle(true, Some(environment), now);
-            self.runtime_reported = false;
-            if let Some((activity, rx)) = &self.activity {
-                rx.try_iter().for_each(drop);
-                self.activity_generation = activity.set_enabled(true);
-            }
-            self.enabled.store(true, Ordering::SeqCst);
-            self.dirty = true;
-        }
-        self.persist();
-        Ok(enabled)
-    }
-
-    fn command(&mut self, command: Command) -> bool {
-        match command {
-            Command::Toggle(enabled, reply) => {
-                let result = self.toggle(enabled);
-                let _ = reply.send(result);
-            }
-            Command::Mode {
-                generation,
-                mode,
-                reason,
-                occurred_at,
-            } => {
-                if self.core.enabled && generation == self.generation.load(Ordering::SeqCst) {
-                    self.core.record(
-                        EventName::InputModeResult,
-                        mode_fields(mode, reason),
-                        occurred_at,
-                    );
-                    self.dirty = true;
-                }
-            }
-            Command::Shutdown => return true,
-        }
-        false
-    }
-
-    async fn flush(&mut self, client: &reqwest::Client, endpoint: &str) {
-        let now = chrono::Utc::now().timestamp_millis();
-        let batch = self.core.batch(now);
-        if batch.is_empty() {
-            self.core.next_flush = now + core::FLUSH_MS;
-            return;
-        }
-        self.persist();
-        let jitter = uuid::Uuid::new_v4().as_u128() as u64;
-        match transport::deliver(client, endpoint, &batch).await {
-            transport::Delivery::Receipt(receipt) => self.core.acknowledge(
-                &batch,
-                receipt,
-                chrono::Utc::now().timestamp_millis(),
-                jitter,
-            ),
-            transport::Delivery::Rejected => self.core.reject_batch(&batch, now),
-            transport::Delivery::Retry => self
-                .core
-                .retry(chrono::Utc::now().timestamp_millis(), jitter),
-        }
-        self.dirty = true;
-        self.persist();
     }
 }
 
-pub fn mode_fields(mode: &str, reason: &str) -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("mode".into(), mode.into()),
-        (
-            "result".into(),
-            if reason == "none" {
-                "success"
-            } else {
-                "failed"
-            }
-            .into(),
-        ),
-        ("reason".into(), reason.into()),
-    ])
-}
-
-async fn run(
-    app: AppHandle,
-    engine: Arc<BurstEngine>,
-    enabled: Arc<AtomicBool>,
-    generation: Arc<AtomicU64>,
-    rx: Receiver<Command>,
-) {
-    let paths = app.path().app_data_dir().ok().map(storage::Paths::new);
-    let is_enabled = enabled.load(Ordering::SeqCst);
-    let environment = is_enabled
-        .then(|| storage::environment(paths.as_ref().map(|paths| paths.environment.as_path())));
-    let queue = if is_enabled {
-        storage::read_queue(paths.as_ref().map(|paths| paths.queue.as_path()))
+fn configuration_source_allowed(source: &tauri::Url) -> bool {
+    if !source.username().is_empty() || source.password().is_some() {
+        return false;
+    }
+    if cfg!(debug_assertions) {
+        source.scheme() == "http"
+            && matches!(source.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
     } else {
-        core::QueueFile::default()
-    };
-    let now = chrono::Utc::now().timestamp_millis();
-    let mut collector = Collector::new(is_enabled, environment, queue, now);
-    collector.record(EventName::SessionStarted, BTreeMap::new(), now);
-    let activity = engine.observe_rule_activity();
-    let activity_generation = activity
-        .as_ref()
-        .map_or(0, |(activity, _)| activity.set_enabled(is_enabled));
-    let mut worker = Worker {
-        app,
-        engine,
-        core: collector,
-        enabled,
-        generation,
-        paths,
-        activity,
-        activity_generation,
-        runtime_reported: false,
-        dirty: true,
-    };
-    worker.persist();
-    let client = transport::client();
-    let endpoint = endpoint();
-    let mut saved_at = Instant::now();
-    loop {
-        let shutdown = match rx.recv_timeout(Duration::from_millis(250)) {
-            Ok(command) => worker.command(command),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => true,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
-        };
-        worker.observe();
-        if saved_at.elapsed() >= Duration::from_secs(1) {
-            worker.persist();
-            saved_at = Instant::now();
-        }
-        if shutdown || chrono::Utc::now().timestamp_millis() >= worker.core.next_flush {
-            if let (Some(client), Some(endpoint)) = (&client, &endpoint) {
-                worker.flush(client, endpoint).await;
-            }
-        }
-        if shutdown {
-            worker.persist();
-            break;
-        }
+        source.scheme() == "https"
     }
 }
 
-fn endpoint() -> Option<String> {
-    #[cfg(debug_assertions)]
-    let base = std::env::var("FLAIR_INSIGHTS_API")
-        .unwrap_or_else(|_| "http://localhost:8100/api/v1".into());
-    #[cfg(not(debug_assertions))]
-    let base = "https://platform.xwink.fun/api/v1".to_string();
-    let url = reqwest::Url::parse(&base).ok()?;
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
+fn service_endpoint(source: &tauri::Url, services: &serde_json::Value) -> Option<String> {
+    let path = services["insights"]["anonymous"].as_str()?;
+    if services["schemaVersion"] != 1
+        || path != "/api/v1/insight-reports/flair-bloom/anonymous"
+        || !source.username().is_empty()
+        || source.password().is_some()
     {
         return None;
     }
-    #[cfg(debug_assertions)]
-    if !["localhost", "127.0.0.1", "[::1]"].contains(&url.host_str()?) || url.scheme() != "http" {
+    if !configuration_source_allowed(source) {
         return None;
     }
-    Some(format!(
-        "{}/insight-reports/flair-bloom/anonymous",
-        base.trim_end_matches('/')
-    ))
+    source.join(path).ok().map(|url| url.to_string())
+}
+
+pub fn setup(app: &AppHandle) {
+    let (tx, rx) = channel(64);
+    app.manage(InsightsState { tx });
+    let app = app.clone();
+    if std::thread::Builder::new()
+        .name(THREAD_NAME.into())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    runtime.block_on(run(app, rx));
+                }
+            }));
+            if result.is_err() {
+                tracing::warn!("使用统计已停止，产品功能继续运行");
+            }
+        })
+        .is_err()
+    {
+        tracing::warn!("使用统计后台未能启动");
+    }
+}
+
+fn persist(paths: Option<&storage::Paths>, collector: &Collector) {
+    if let Some(paths) = paths {
+        let _ = storage::write_json(&paths.queue, &collector.queue);
+    }
+}
+
+async fn run(app: AppHandle, mut rx: Receiver<Command>) {
+    let mut pending_services = None;
+    let mut initial_layout = None;
+    if crate::bootstrap::agreement::check_agreement(&app) {
+        loop {
+            match rx.recv().await {
+                Some(Command::Activate) => break,
+                Some(Command::Services(value)) => pending_services = Some(value),
+                Some(Command::Layout(value)) => initial_layout = Some(value),
+                Some(Command::Shutdown(reply)) => {
+                    let _ = reply.send(());
+                    return;
+                }
+                None => return,
+            }
+        }
+    }
+    let paths = app.path().app_data_dir().ok().map(storage::Paths::new);
+    let environment = storage::environment(paths.as_ref().map(|p| p.environment.as_path()));
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut collector = Collector::new(
+        true,
+        Some(environment),
+        storage::read_queue(paths.as_ref().map(|p| p.queue.as_path())),
+        now,
+    );
+    collector.record(EventName::SessionStarted, BTreeMap::new(), now);
+    if let Some(layout) = &initial_layout {
+        collector.record(
+            EventName::LayoutObserved,
+            BTreeMap::from([("layout".into(), layout.clone())]),
+            now,
+        );
+    }
+    persist(paths.as_ref(), &collector);
+    let source = crate::bootstrap::update::configured_update_endpoints(&app)
+        .ok()
+        .and_then(|urls| urls.into_iter().next())
+        .filter(configuration_source_allowed);
+    let config_path = paths
+        .as_ref()
+        .map(|p| p.queue.with_file_name("services.json"));
+    let mut endpoint = config_path
+        .as_ref()
+        .filter(|path| std::fs::metadata(path).is_ok_and(|meta| meta.len() <= 4096))
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|services| service_endpoint(source.as_ref()?, &services));
+    if let Some(services) = pending_services {
+        if let Some(url) = source
+            .as_ref()
+            .and_then(|url| service_endpoint(url, &services))
+        {
+            endpoint = Some(url);
+            if let Some(path) = &config_path {
+                let _ = storage::write_json(path, &services);
+            }
+        }
+    }
+    let client = transport::client();
+    let mut configuration: Option<tokio::task::JoinHandle<Option<serde_json::Value>>> = None;
+    let mut next_configuration = Instant::now();
+    let mut tick = tokio::time::interval(Duration::from_secs(60));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut usage = lifecycle::UsageClock::default();
+    let started = Instant::now();
+    let mut elapsed = 0;
+    let mut layout = initial_layout;
+    let mut delivery: Option<tokio::task::JoinHandle<(Vec<core::Event>, transport::Delivery)>> =
+        None;
+    let checkpoint =
+        |collector: &mut Collector, usage: &mut lifecycle::UsageClock, elapsed: &mut u64| {
+            let total = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            let now = chrono::Utc::now().timestamp_millis();
+            for (at, duration) in usage.observe(now, total.saturating_sub(*elapsed)) {
+                collector.record(
+                    EventName::SessionUsage,
+                    BTreeMap::from([("durationMs".into(), duration.to_string())]),
+                    at,
+                );
+            }
+            *elapsed = total;
+        };
+    loop {
+        tokio::select! {
+            command = rx.recv() => match command {
+                Some(Command::Activate) => {},
+                Some(Command::Layout(next)) => {
+                    if layout.as_ref() != Some(&next) {
+                        collector.record(EventName::LayoutObserved, BTreeMap::from([("layout".into(), next.clone())]), chrono::Utc::now().timestamp_millis());
+                        layout = Some(next);
+                        persist(paths.as_ref(), &collector);
+                    }
+                }
+                Some(Command::Services(services)) => {
+                    if let Some(url) = source.as_ref().and_then(|url| service_endpoint(url, &services)) {
+                        endpoint = Some(url);
+                        if let Some(path) = &config_path { let _ = storage::write_json(path, &services); }
+                    }
+                }
+                Some(Command::Shutdown(reply)) => {
+                    checkpoint(&mut collector, &mut usage, &mut elapsed);
+                    collector.record(EventName::SessionEnded, BTreeMap::new(), chrono::Utc::now().timestamp_millis());
+                    persist(paths.as_ref(), &collector);
+                    if let (Some(client), Some(endpoint)) = (&client, &endpoint) {
+                        let batch = collector.batch(chrono::Utc::now().timestamp_millis());
+                        if !batch.is_empty() {
+                            if let Ok(transport::Delivery::Receipt(receipt)) = tokio::time::timeout(
+                                Duration::from_millis(50), transport::deliver(client, endpoint, &batch),
+                            ).await {
+                                collector.acknowledge(&batch, receipt, chrono::Utc::now().timestamp_millis(), 0);
+                                persist(paths.as_ref(), &collector);
+                            }
+                        }
+                    }
+                    let _ = reply.send(());
+                    break;
+                }
+                None => break,
+            },
+            _ = tick.tick() => {
+                checkpoint(&mut collector, &mut usage, &mut elapsed);
+                persist(paths.as_ref(), &collector);
+            },
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+        }
+        if configuration
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            if let Some(task) = configuration.take() {
+                if let (Ok(Some(raw)), Some(source)) = (task.await, source.as_ref()) {
+                    receive_services(&app, source, &raw);
+                }
+            }
+            next_configuration = Instant::now() + Duration::from_secs(30);
+        }
+        if endpoint.is_none() && configuration.is_none() && Instant::now() >= next_configuration {
+            if let (Some(client), Some(source)) = (&client, &source) {
+                let client = client.clone();
+                let source = source.clone();
+                configuration = Some(tokio::spawn(async move {
+                    transport::bootstrap(&client, source.as_str()).await
+                }));
+            }
+        }
+        if delivery.as_ref().is_some_and(|task| task.is_finished()) {
+            if let Some(task) = delivery.take() {
+                if let Ok((batch, result)) = task.await {
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let jitter = uuid::Uuid::new_v4().as_u128() as u64;
+                    match result {
+                        transport::Delivery::Receipt(receipt) => {
+                            collector.acknowledge(&batch, receipt, now, jitter)
+                        }
+                        transport::Delivery::Rejected => collector.reject_batch(&batch, now),
+                        transport::Delivery::Retry => collector.retry(now, jitter),
+                    }
+                    persist(paths.as_ref(), &collector);
+                } else {
+                    break;
+                }
+            }
+        }
+        if delivery.is_none() && chrono::Utc::now().timestamp_millis() >= collector.next_flush {
+            if let (Some(client), Some(endpoint)) = (&client, &endpoint) {
+                let batch = collector.batch(chrono::Utc::now().timestamp_millis());
+                if batch.is_empty() {
+                    collector.next_flush = chrono::Utc::now().timestamp_millis() + core::FLUSH_MS;
+                    continue;
+                }
+                let client = client.clone();
+                let endpoint = endpoint.clone();
+                delivery = Some(tokio::spawn(async move {
+                    let result = transport::deliver(&client, &endpoint, &batch).await;
+                    (batch, result)
+                }));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn routes_stay_on_update_origin() {
+        let origin = if cfg!(debug_assertions) {
+            "http://127.0.0.1:8100"
+        } else {
+            "https://platform.example"
+        };
+        let source =
+            tauri::Url::parse(&format!("{origin}/api/v1/client-bootstrap/flair-bloom")).unwrap();
+        let config = serde_json::json!({"schemaVersion":1,"insights":{"anonymous":"/api/v1/insight-reports/flair-bloom/anonymous"}});
+        assert_eq!(
+            service_endpoint(&source, &config).as_deref(),
+            Some(format!("{origin}/api/v1/insight-reports/flair-bloom/anonymous").as_str())
+        );
+        for path in [
+            "https://evil.example/events",
+            "//evil.example/events",
+            "/api/v1/insight-reports/anvil/anonymous",
+        ] {
+            let mut bad = config.clone();
+            bad["insights"]["anonymous"] = path.into();
+            assert!(service_endpoint(&source, &bad).is_none());
+        }
+        if cfg!(debug_assertions) {
+            assert!(!configuration_source_allowed(
+                &tauri::Url::parse(
+                    "https://platform.xwink.fun/api/v1/client-bootstrap/flair-bloom"
+                )
+                .unwrap()
+            ));
+            assert!(!configuration_source_allowed(
+                &tauri::Url::parse("http://remote.example/bootstrap").unwrap()
+            ));
+        }
+    }
 }

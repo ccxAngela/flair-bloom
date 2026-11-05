@@ -42,7 +42,7 @@
 
 `tauri-plugin-store` 的 `settings.json` 复用同一迁移基础设施。已知键：`closeBehavior`、`holdInGroupHintDismissed`（某组变成长按与切换混排时的插队提示已勾「不再提示」）、`membershipAgreedVersion`（上次兑换时同意的会员服务协议版本，再兑换时版本没变就默认勾选）、`sound`、`theme`、`layout`、`autoUpdate`（与后端 `bootstrap/update.rs` 同名同读）、`autoEnableOnStart`（与 `bootstrap/startup.rs` 同名同读）、`tours`（`{ completed: string[], introVersion: string }`，`introVersion` 是已自动展示过的教程版本，与协议版本同一套语义）、`runAsAdmin`（「以管理员模式启动」的用户意图，注册表标志被更新抹掉时靠它自愈）、当前激活配置路径。开机自启与「以管理员模式启动」不在这里：前者由 `tauri-plugin-autostart` 写 `HKCU\Run`，后者写 `HKCU\...\AppCompatFlags\Layers`，都以注册表为准，界面只读回显。
 
-`usageInsightsEnabled` 是 Rust 宿主统一读写的使用统计选择，未设置默认开启，读取设置失败时停止统计；面板只经统计命令修改，不直接写 store。关闭选择不随配置切换、重启或升级复位。统计队列与环境回退文件独立于 `.qzh`，开发构建位于应用数据目录 `insights-development/`，正式构建位于 `insights/`；格式和保留边界见[架构](architecture.md#使用统计)。
+统计不读取或写入用户关闭选择，历史 `usageInsightsEnabled` 不再生效。队列、服务配置缓存与环境回退文件独立于 `.qzh`，开发构建位于应用数据目录 `insights-development/`，正式位于 `insights/`；范围和保留边界见[架构](architecture.md#使用统计)。
 
 ## 输入约束
 

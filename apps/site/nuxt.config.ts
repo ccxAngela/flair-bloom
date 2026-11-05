@@ -20,6 +20,11 @@ const brandBootstrap = `(function(){try{var d=document.documentElement,t=${JSON.
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-01-01',
+  runtimeConfig: {
+    public: {
+      clientBootstrapUrl: 'https://platform.xwink.fun/api/v1/client-bootstrap/flair-bloom',
+    },
+  },
   devServer: { port: 3900 },
   modules: ['@xwink/ui/nuxt'],
   alias: {
@@ -58,7 +63,7 @@ export default defineNuxtConfig({
   },
   css: ['~/assets/css/main.css'],
   nitro: {
-    prerender: { crawlLinks: false, routes: ['/', '/download'] },
+    prerender: { crawlLinks: false, routes: ['/', '/download', '/privacy'] },
   },
   vite: {
     plugins: [tailwindcss()],

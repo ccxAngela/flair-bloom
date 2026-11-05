@@ -65,10 +65,7 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": [
-        "https://gh-proxy.com/https://github.com/x-wink/flair-bloom/releases/latest/download/latest.json",
-        "https://github.com/x-wink/flair-bloom/releases/latest/download/latest.json"
-      ],
+      "endpoints": ["https://platform.xwink.fun/api/v1/client-bootstrap/flair-bloom"],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE1NzQyOEYwNjJCRUQ4OUEKUldTYTJMNWk4Q2gwRmNZc2srbnMvYzJnTERlYkZnOXEzVnVPbFJ0RW91MUlMNXZlY05OVmdQQlQK"
     }
   }

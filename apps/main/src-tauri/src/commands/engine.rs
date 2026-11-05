@@ -322,7 +322,6 @@ pub fn set_input_mode(
             InputMode::from_str(&mode).ok_or_else(|| format!("未知输入模式: {mode}"))?;
 
         if input_mode.requires_admin() && !win_driver::elevation::is_process_elevated() {
-            crate::insights::InsightsState::mode_result(&app, input_mode.as_str(), "permission");
             return Err(format!(
                 "{} 需要管理员权限，请先以管理员身份重启应用",
                 input_mode_label(input_mode)
@@ -332,22 +331,19 @@ pub fn set_input_mode(
         if input_mode == InputMode::Interception {
             let health = crate::commands::status::collect_interception_health();
             if let Some(issue) = health.issue {
-                crate::insights::InsightsState::mode_result(&app, input_mode.as_str(), "driver");
                 tracing::warn!("游戏模式启用被阻止：{}", health.detail);
-                switch_input_backend_runtime(&app, &state.0, InputMode::SendInput)?;
+                switch_input_backend_runtime(&state.0, InputMode::SendInput)?;
                 crate::commands::status::emit_status_changed(&app);
                 return Err(format!("{issue} 已回退到通用模式，游戏模式未启用。"));
             }
         }
 
-        check_rules_for_mode(&state.0.get_rules(), input_mode).inspect_err(|_| {
-            crate::insights::InsightsState::mode_result(&app, input_mode.as_str(), "unsupported");
-        })?;
+        check_rules_for_mode(&state.0.get_rules(), input_mode)?;
 
         if persist.unwrap_or(true) {
             switch_input_backend(&app, &state.0, input_mode)?;
         } else {
-            switch_input_backend_runtime(&app, &state.0, input_mode)?;
+            switch_input_backend_runtime(&state.0, input_mode)?;
         }
         if win_input::current_mode() == InputMode::HidStick {
             crate::bootstrap::input::on_hid_stick_backend_up(&app);
@@ -380,7 +376,7 @@ pub(crate) fn switch_input_backend(
     mode: win_input::InputMode,
 ) -> Result<(), String> {
     use tauri_plugin_store::StoreExt;
-    switch_input_backend_runtime(app, engine, mode)?;
+    switch_input_backend_runtime(engine, mode)?;
     if let Ok(store) = app.store(crate::STORE_PATH) {
         store.set("input_mode", serde_json::json!(mode.as_str()));
         let _ = store.save();
@@ -390,24 +386,13 @@ pub(crate) fn switch_input_backend(
 
 #[cfg(windows)]
 fn switch_input_backend_runtime(
-    app: &AppHandle,
     engine: &BurstEngine,
     mode: win_input::InputMode,
 ) -> Result<(), String> {
     // 临时降级也必须先停止注入和抬键，但不能改写用户保存的模式。
-    engine.begin_backend_switch().inspect_err(|_| {
-        crate::insights::InsightsState::mode_result(app, mode.as_str(), "unavailable");
-    })?;
+    engine.begin_backend_switch()?;
     win_input::init_backend(mode);
     engine.end_backend_switch();
-    let reason = if win_input::current_mode() == mode {
-        "none"
-    } else if mode == win_input::InputMode::HidStick {
-        "unavailable"
-    } else {
-        "driver"
-    };
-    crate::insights::InsightsState::mode_result(app, mode.as_str(), reason);
     Ok(())
 }
 
