@@ -17,7 +17,13 @@ import {
 } from 'react';
 import iconUrl from '../../assets/icon-32.png';
 import bgUrl from '../../assets/icon.png';
-import { APP_NAME, AUTHOR_EMAIL, WINDOWS_RESTART_HINT } from '../../constants';
+import {
+  APP_NAME,
+  AUTHOR_EMAIL,
+  PRODUCT_WEBSITE,
+  PRODUCTS_URL,
+  WINDOWS_RESTART_HINT,
+} from '../../constants';
 import HorizontalLayout from './HorizontalLayout';
 import RuleCard, { type CardDragHandlers } from './RuleCard';
 import RuleGroup from './RuleGroup';
@@ -2617,8 +2623,8 @@ export default function PanelApp() {
     }
   }
 
-  function openSupport() {
-    invoke('open_link', { target: 'support' }).catch((e) => toast.error(`打开支持&帮助失败：${e}`));
+  function openExternalLink(target: string) {
+    invoke('open_link', { target }).catch((e) => toast.error(`打开链接失败：${e}`));
   }
 
   // 先复制邮箱再打开 QQ 邮箱网页：网页版没有能预填收件人的写信链接，只能让用户粘贴
@@ -3336,10 +3342,17 @@ export default function PanelApp() {
           { type: 'divider' },
           { label: '诊断修复', onClick: handleShowRepair },
           {
-            label: '支持&帮助',
+            label: '前往官网',
             onClick: () => {
               setMenuOpen(false);
-              openSupport();
+              openExternalLink(PRODUCT_WEBSITE);
+            },
+          },
+          {
+            label: '更多产品',
+            onClick: () => {
+              setMenuOpen(false);
+              openExternalLink(PRODUCTS_URL);
             },
           },
           {
@@ -3528,6 +3541,8 @@ export default function PanelApp() {
           }}
           onCopied={() => toast.success('已复制环境信息')}
           onGroupCopied={() => toast.success('已复制群号，在 QQ 中搜索加群')}
+          onOpenWebsite={() => openExternalLink(PRODUCT_WEBSITE)}
+          onWebsiteCopied={() => toast.success('已复制官网链接')}
           onCopyFailed={(e) => toast.error(`复制失败：${e}`)}
         />
       </Overlay>

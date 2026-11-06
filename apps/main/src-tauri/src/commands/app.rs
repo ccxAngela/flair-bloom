@@ -11,7 +11,6 @@ use crate::bootstrap::{
 
 pub(crate) const PENDING_UPDATE_DIR: &str = "pending_update";
 
-/// 产品页的「支持&帮助」一节。
 const SUPPORT_URL: &str = "https://app.xwink.fun/flair-bloom/#support";
 /// QQ 邮箱网页版。「写邮件」打开它、邮箱由前端先复制好：不走 mailto，没设默认邮件程序就打不开，
 /// 设了的多半是启动很慢的 Outlook，点下去像没响应；也不拼写信链接，QQ 邮箱没有公开的写信参数，
@@ -20,20 +19,42 @@ const SUPPORT_URL: &str = "https://app.xwink.fun/flair-bloom/#support";
 /// 换个人就失效。
 const QQ_MAIL_URL: &str = "https://mail.qq.com/";
 
-/// 用系统默认程序打开外部链接：`support` 是产品页的支持一节，`mail` 是 QQ 邮箱网页版，`membership`
-/// 是 xwink 会员服务协议正文，`jx3box` 是剑网三专栏首页的 JX3Box。只认这几个
-/// 写死的目标、前端只传名字：没装 opener 插件，也就不给 WebView 开「打开任意网址」的口子。
-/// 专栏列表里的链接走 [`super::jx3::open_jx3_link`]，只放行当前数据里有的地址。
+// 统一在后端校验域名，让各个入口复用同一规则，避免子域名逐个登记或前端自行放行。
 #[tauri::command]
 pub fn open_link(target: String) -> Result<(), String> {
-    let link = match target.as_str() {
+    shell_open(&resolve_link(&target)?)
+}
+
+fn resolve_link(target: &str) -> Result<String, String> {
+    let link = match target {
         "support" => SUPPORT_URL,
         "membership" => super::license::MEMBERSHIP_TERMS_URL,
         "mail" => QQ_MAIL_URL,
         "jx3box" => super::jx3::JX3BOX_HOME,
-        other => return Err(format!("未知链接: {other}")),
+        _ => {
+            return xwink_url(target)
+                .map(|url| url.to_string())
+                .ok_or_else(|| "仅支持 xwink.fun 及其子域名的 HTTPS 链接".into());
+        }
     };
-    shell_open(link)
+    Ok(link.to_owned())
+}
+
+pub(crate) fn xwink_url(link: &str) -> Option<tauri::Url> {
+    if link.chars().any(char::is_control) {
+        return None;
+    }
+    let url = tauri::Url::parse(link).ok()?;
+    let host = url.host_str()?;
+    if url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && (host == "xwink.fun" || host.ends_with(".xwink.fun"))
+    {
+        Some(url)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn shell_open(link: &str) -> Result<(), String> {
@@ -311,4 +332,53 @@ fn now_secs() -> u64 {
 fn version_ge(a: &str, b: &str) -> bool {
     let parse = |s: &str| -> Vec<u32> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
     parse(a) >= parse(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xwink_root_and_nested_subdomains_open_without_individual_registration() {
+        for target in [
+            "https://xwink.fun/",
+            "https://app.xwink.fun/flair-bloom/",
+            "https://one.two.xwink.fun/page?from=app#details",
+            "https://APP.XWINK.FUN/",
+        ] {
+            let actual = resolve_link(target).unwrap();
+            assert_eq!(actual, tauri::Url::parse(target).unwrap().to_string());
+        }
+    }
+
+    #[test]
+    fn external_domains_credentials_and_other_protocols_are_rejected() {
+        for target in [
+            "https://example.com/",
+            "https://evilxwink.fun/",
+            "https://xwink.fun.example.com/",
+            "https://xwink.fun@example.com/",
+            "https://user:password@app.xwink.fun/",
+            "http://app.xwink.fun/",
+            "file:///xwink.fun/",
+            "javascript:alert('xwink.fun')",
+            "//app.xwink.fun/",
+            "https://app.xwink.fun/\n",
+        ] {
+            assert!(resolve_link(target).is_err(), "不应放行 {target:?}");
+        }
+    }
+
+    #[test]
+    fn existing_named_targets_keep_their_destinations() {
+        for (target, expected) in [
+            ("support", SUPPORT_URL),
+            ("mail", QQ_MAIL_URL),
+            ("membership", super::super::license::MEMBERSHIP_TERMS_URL),
+            ("jx3box", super::super::jx3::JX3BOX_HOME),
+        ] {
+            assert_eq!(resolve_link(target).unwrap(), expected);
+        }
+        assert!(resolve_link("unknown").is_err());
+    }
 }

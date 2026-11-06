@@ -60,7 +60,7 @@ struct Cached {
     data: Value,
 }
 
-/// 本次运行持有的专栏数据：再次打开专栏不重复联网，外链也只放行这份数据里的地址。
+// 持有当前数据，让第三方外链的放行范围与界面展示一致。
 #[derive(Default)]
 pub struct Jx3State {
     held: Mutex<Option<ColumnResult>>,
@@ -137,8 +137,10 @@ fn choose(remote: Option<Value>, cache: Option<(u64, Value)>, now: u64) -> Colum
     }
 }
 
-/// 只放行 https，且必须是当前数据里某条白皮书或宏的链接。
 fn link_allowed(data: &Value, url: &str) -> bool {
+    if super::app::xwink_url(url).is_some() {
+        return true;
+    }
     if !url.starts_with("https://") {
         return false;
     }
@@ -230,9 +232,11 @@ pub async fn get_jx3_column(app: AppHandle, refresh: bool) -> Result<ColumnResul
     Ok(load(&app, refresh).await)
 }
 
-/// 打开专栏里某条白皮书或宏的原文。前端只能打开当前数据里有的链接（见 [`link_allowed`]）。
 #[tauri::command]
 pub fn open_jx3_link(state: State<'_, Jx3State>, url: String) -> Result<(), String> {
+    if let Some(link) = super::app::xwink_url(&url) {
+        return super::app::shell_open(link.as_str());
+    }
     let allowed = state
         .held()
         .is_some_and(|held| link_allowed(&held.data, &url));

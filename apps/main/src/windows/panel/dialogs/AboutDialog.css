@@ -132,6 +132,25 @@
   font-variant-numeric: tabular-nums;
 }
 
+.about-website {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.about-website-link {
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: var(--fb-color-primary);
+  font: inherit;
+  text-align: right;
+  text-decoration: underline;
+  word-break: break-all;
+  cursor: pointer;
+  user-select: text;
+}
+
 .about-key--inline {
   color: var(--fb-text-weak);
   font-size: var(--fb-fs-sm);

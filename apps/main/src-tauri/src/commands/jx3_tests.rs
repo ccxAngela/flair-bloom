@@ -70,6 +70,16 @@ fn only_https_links_present_in_data_are_allowed() {
     assert!(!link_allowed(&json!({}), "https://example.com/a"));
 }
 
+#[test]
+fn xwink_links_share_the_application_domain_policy() {
+    let data = json!({});
+    assert!(link_allowed(&data, "https://xwink.fun/"));
+    assert!(link_allowed(&data, "https://app.xwink.fun/flair-bloom/"));
+    assert!(link_allowed(&data, "https://one.two.xwink.fun/page"));
+    assert!(!link_allowed(&data, "https://xwink.fun.example.com/"));
+    assert!(!link_allowed(&data, "http://app.xwink.fun/"));
+}
+
 /// 打真实的产品站：站点发布后跑 `cargo test -p flair-bloom live_remote -- --ignored`。
 #[test]
 #[ignore = "联网，站点发布后手动跑"]

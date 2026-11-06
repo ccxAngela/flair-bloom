@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { APP_NAME, AUTHOR_EMAIL, PRODUCT_QQ_GROUP } from '../../../constants';
+import { APP_NAME, AUTHOR_EMAIL, PRODUCT_QQ_GROUP, PRODUCT_WEBSITE } from '../../../constants';
 import Button from '../components/Button';
 import { collectLiveEnvironment, type LiveEnvironment } from '../environment';
 import DialogShell from './DialogShell';
@@ -36,6 +36,8 @@ interface Props {
   onOpenDir: (kind: 'install' | 'data' | 'log' | 'drivers') => void;
   onCopied: () => void;
   onGroupCopied: () => void;
+  onOpenWebsite: () => void;
+  onWebsiteCopied: () => void;
   onCopyFailed: (err: unknown) => void;
 }
 
@@ -69,6 +71,8 @@ export default function AboutDialog({
   onOpenDir,
   onCopied,
   onGroupCopied,
+  onOpenWebsite,
+  onWebsiteCopied,
   onCopyFailed,
 }: Props) {
   const [copying, setCopying] = useState(false);
@@ -79,6 +83,15 @@ export default function AboutDialog({
     try {
       await navigator.clipboard.writeText(PRODUCT_QQ_GROUP);
       onGroupCopied();
+    } catch (e) {
+      onCopyFailed(e);
+    }
+  }
+
+  async function handleCopyWebsite() {
+    try {
+      await navigator.clipboard.writeText(PRODUCT_WEBSITE);
+      onWebsiteCopied();
     } catch (e) {
       onCopyFailed(e);
     }
@@ -188,6 +201,17 @@ export default function AboutDialog({
         <section className="about-section">
           <p className="about-section-label">交流与联系</p>
           <ul className="about-list">
+            <li>
+              <span className="about-key">官网</span>
+              <span className="about-value about-value--with-action about-website">
+                <button type="button" className="about-website-link" onClick={onOpenWebsite}>
+                  {PRODUCT_WEBSITE}
+                </button>
+                <Button size="sm" variant="outline" tone="primary" onClick={handleCopyWebsite}>
+                  复制链接
+                </Button>
+              </span>
+            </li>
             <li>
               <span className="about-key">产品QQ群</span>
               <span className="about-value about-value--with-action">
