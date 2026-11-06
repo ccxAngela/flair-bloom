@@ -10,9 +10,11 @@
 
 ## 加速代理与兜底
 
-`tauri.conf.json` 的 updater endpoints 是同一份 `latest.json` 的两条地址：`gh-proxy.com` 代理版在前、GitHub 原始地址在后，updater 按序试到读通为止，`build_updater` 不在运行时改写它们（有单测钉住这两条的对应关系）。安装包地址由 `proxy_github_download_url` 改写成代理地址并交回原始地址，下载失败时用原始地址再试一次；`update-download-failed` 只在两条路都走不通时才发给前端，否则回退成功也会弹一个吓人的失败提示。
+`tauri.conf.json` 的 updater endpoints 只配置第一方 `https://platform.xwink.fun/api/v1/client-bootstrap/flair-bloom`。检查更新时加 `updates=1`，由 Platform 解析 GitHub 发布清单并附带服务配置；同版本也读取配置，只有远端版本严格高于当前版本才下载。开发构建可以用 `FLAIR_BOOTSTRAP_URL` 指向无凭据、无查询参数的本机 HTTP 入口，正式构建不读取此覆盖。
 
-gh-proxy 是第三方免费服务，它挂了就退到 GitHub 直连（国内约 20 KB/s，基本等于不可用）。这不是撤镜像换来的新风险：原先的服务器镜像同步本身也走 gh-proxy、失败才回落同样的直连，代理挂掉时镜像照样拿不到新版本，单点依赖始终是这一个。撤掉换来的是零带宽成本与零同步基础设施；失去的只有「已经同步落盘的旧版本在代理不可用时仍能下载」这一点。镜像那套要回来按 git 历史恢复。
+安装包仍托管于 GitHub Releases，地址由 `proxy_github_download_url` 改写成 `gh-proxy.com` 代理地址并保留原始地址，下载失败时用原始地址再试一次；`update-download-failed` 只在两条路都走不通时才发给前端，否则回退成功也会弹一个吓人的失败提示。
+
+gh-proxy 是第三方免费服务，不可用时安装包下载退到 GitHub 直连，国内速度可能明显变慢。自家服务器只提供配置与静态产品页，不镜像安装包，以免承担安装包分发带宽。
 
 ## 更新公告的两个来源不能混
 
@@ -27,11 +29,11 @@ gh-proxy 是第三方免费服务，它挂了就退到 GitHub 直连（国内约
 | 职责         | 平台                               | 说明                                                                                                                                               |
 | ------------ | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 安装包托管   | GitHub Releases                    | `.exe` / `.msi` / `.nsis.zip` + `.sig`                                                                                                             |
-| updater 端点 | GitHub Releases                    | `tauri-action` 每次发布上传 `latest.json`（Tauri 标准 manifest）                                                                                   |
+| updater 端点 | Platform 第一方 bootstrap          | 解析 GitHub Releases 的 `latest.json`，并下发服务配置；`tauri-action` 生成原始更新清单                                                              |
 | 密钥         | GitHub Actions Secrets             | `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)`；许可证公钥 `FLAIR_LICENSE_PUBKEYS`（私钥在 billing，见 [profile-format](profile-format.md)） |
 | CI 构建      | GitHub Actions `release.yml`       | 推 `v*` tag 触发 Windows x64 构建、发布 Draft                                                                                                      |
 | Release 正文 | `CHANGELOG.md`                     | `scripts/extract-changelog.ts` 提取当前版本节                                                                                                      |
 | 产品页       | app.xwink.fun/flair-bloom          | `apps/site` 纯静态 SSG；域名与 server 块归 xwink-console 仓的 app-site 单元                                                                        |
-| 下载加速     | gh-proxy.com                       | 更新清单、安装包、产品页下载链接一律代理优先、GitHub 直连兜底；自家服务器不托管安装包                                                             |
+| 下载加速     | gh-proxy.com                       | 安装包与产品页下载链接代理优先、GitHub 直连兜底；更新清单由第一方 bootstrap 解析，自家服务器不托管安装包                                         |
 
-产品页只有 `/flair-bloom/`（介绍、下载、公告、支持）一条路径，版本数据在浏览器里直读 GitHub Releases API（同样代理优先）；`/flair-bloom/download` 打开即下载最新版 exe（`?type=msi` 下 MSI）。产品页发版走 `site-v*` tag 与 `.github/workflows/site.yml`，不经 Tauri updater，详见 `apps/site/README.md`。
+产品页提供 `/flair-bloom/`（介绍、下载、公告、支持）与 `/flair-bloom/privacy`（协议与数据政策），版本数据在浏览器里直读 GitHub Releases API（同样代理优先），公开累计由第一方 bootstrap 指定的统计接口读取；`/flair-bloom/download` 打开即下载最新版 exe（`?type=msi` 下 MSI）。产品页发版走 `site-v*` tag 与 `.github/workflows/site.yml`，不经 Tauri updater，详见 `apps/site/README.md`。
