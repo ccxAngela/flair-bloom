@@ -1,13 +1,13 @@
 # 产品使用分析与反馈 — 核心结论与 MVP 草案
 
-Status: completed（本地实现、验收与审查完成；未发版）
+Status: archived（本地实现与验收完成；桌面 0.10.0 与官网发布执行中）
 Goal: 用宿主启动、退出、运行时长与布局偏好形成轻量统计闭环，不侵入按键输出。
 
 统一能力、范围与任务状态由 [xwink-console 产品统计路线图](https://cnb.cool/x-wink/playground/xwink-console/-/blob/main/docs/roadmaps/product-insights.md) 维护。本仓实现桌面薄适配与官网数字展示，不新增服务、SDK 或崩溃平台。
 
 ## 已授权与现状
 
-- 用户授权同时调整 flair 和 Anvil，托管完成后审查、提交和推送；本轮不发版。
+- 本地接入与审查已完成；桌面及官网的发布检查与结果见 [0.10.0 发布记录](../release-0.10.0.md)。
 - 协议 1.6 同意后持续记录启动、正常退出、分钟级运行时长检查点、初始与切换后的横竖布局。无用户关闭接口，不读取历史关闭选择。
 - burst-engine、hook、调度器、输入模式与输出路径不含统计代码。统计线程故障被隔离，正常退出先停止引擎，检查点和最多 50ms 尽力投递的总等待上限为 100ms。
 - 唯一第一方 bootstrap 兼任更新清单，连同服务地址一起下发；最新版本也取得配置。下载与版本判断沿原签名更新契约。
@@ -15,10 +15,10 @@ Goal: 用宿主启动、退出、运行时长与布局偏好形成轻量统计�
 
 ## 验收与交接
 
-当前实现和运行约束见 [架构](../../skills/flair-bloom/references/engineering/architecture.md#使用统计)，验证入口见 [testing](../../skills/flair-bloom/references/engineering/testing.md#使用统计验证)，采集说明见 [EULA](../../apps/main/src/assets/EULA.md#七使用统计与数据)。
+当前实现和运行约束见 [架构](../../../skills/flair-bloom/references/engineering/architecture.md#使用统计)，验证入口见 [testing](../../../skills/flair-bloom/references/engineering/testing.md#使用统计验证)，采集说明见 [EULA](../../../apps/main/src/assets/EULA.md#七使用统计与数据)。
 
 Windows 原生客户端已连接本地 Platform：协议同意前不创建统计队列，同意后旧关闭值不生效。一次真实进程观测到启动 1、正常退出 1、布局 3、时长检查点 5，未产生引擎输出事件；同版本更新清单和基础服务配置均可读取，原全局状态保持。设置说明在 405px 下可读，无统计开关。测试后原用户设置与统计目录已恢复。
 
 宿主单测 117 项通过；默认忽略的共享回放已另行执行通过，另外两项系统条件测试未执行。引擎 109 项通过、1 项忽略；引擎、hook、调度器及原输出路径与接入前提交的文件树逐项一致。前端与官网类型检查、构建通过，官网生成 8 路。官网正常显示本地真实累计，503 显示不可用而非零，协议页复用桌面 EULA；浏览官网不发送统计事件。提交钩子继续检查严格 Clippy、前端测试与文档；本轮未创建发布 tag 或上传产物。
 
-发布须先完成 Platform 迁移和 bootstrap／公开统计端点部署，再发布桌面与官网；用户本轮明确要求不发布。其他反馈、自动崩溃、地域画像与营销归因不在本次实施范围。
+Platform 迁移、bootstrap、公开累计与生产跨域已上线并核验，桌面与官网按发布记录执行。其他反馈、自动崩溃、地域画像与营销归因不在本次实施范围。

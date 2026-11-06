@@ -1,6 +1,6 @@
 # 剑网三专栏 — 改造路线图 / Change Roadmap
 
-Status: active（进行中）
+Status: archived（专栏已发布；采集脚本与补充真机验收保留为后续项）
 Goal: ☰ 菜单打开「剑网三专栏」，按门派、心法找到白皮书和一键宏 / 多段宏，一点直达原文，宏名一键复制后可在游戏里的插件中同步；列表随赛季更新时不用发应用新版本。
 
 ---
@@ -109,7 +109,7 @@ T1 ─> T4 ──────────────┘
 
 ## 6. 工期 / Effort
 
-口径：作者加 AI 单线推进，单位为净工作日；校准来源同 [window-binding](window-binding.md)（`archive/onboarding-tour.md` 预估 6.5 天，逐卡 ✅，没有偏差）。
+口径：作者加 AI 单线推进，单位为净工作日；校准来源同 [window-binding](../window-binding.md)（`archive/onboarding-tour.md` 预估 6.5 天，逐卡 ✅，没有偏差）。
 
 | 任务卡 | 预估 | 实际 | 偏差说明 |
 | --- | --- | --- | --- |

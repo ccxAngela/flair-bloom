@@ -91,13 +91,12 @@
 
 - 窗口绑定与自动切换配置：按前台游戏切换对应配置，只在绑定窗口处于前台时生效，切走自动暂停（[路线图](docs/roadmaps/window-binding.md)）。
 - 组合键触发与连发，例如按 `Ctrl+F` 连发 `Shift+1`（[评估草案](docs/roadmaps/key-chords.md)）。
-- 外设模式支持同键切换连发和横版键鼠图（[路线图](docs/roadmaps/hid-stick.md)）。
+- 外设模式支持同键切换连发和横版键鼠图（[后续入口](docs/roadmaps/archive/hid-stick.md)）。
 - 配置文件被外部改动后自动重新加载。
 - 官网补实拍截图和站内反馈入口。
-- 产品使用统计的宿主轻量采集、统一配置与官网累计已完成本地验收，本轮未发布；后续先部署 Platform，再发布桌面与官网（[接入记录](docs/roadmaps/product-insights.md)）。
 - 桌宠随连发和键鼠／手柄输入做动画反馈（[设计稿](docs/roadmaps/pet-mode.md)）。
 - 界面迁到 Vue 与 xwink 组件库（[路线图](docs/roadmaps/vue-migration.md)）。
-- 按键队列与录制的 Windows 四通道真机验收：实现与自动化已完成，组合键独立评估（[实施记录](docs/roadmaps/output-sequences.md)）。
+- 按键队列与录制的 Windows 四通道真机验收：实现与自动化已完成，组合键独立评估（[实施记录](docs/roadmaps/archive/output-sequences.md)）。
 - 随机抖动。
 
 ---

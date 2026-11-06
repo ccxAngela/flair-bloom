@@ -167,7 +167,7 @@ V0 ─> V1 ─┬─> V2 ─────────┐
 
 - **执行顺序 / Order:** V0 → V1 → V2 / V3 并行 → V4 → V5 → V6 → V7。
 - **最小可交付里程碑 / Minimum valuable milestone:** 没有半途可发的子集（D1 一步到位）。V0 本身有独立价值，先做完就有了前端回归基线。
-- **与其他路线图：** 搁置期间新增的 React 代码（[license](./license.md) 的激活对话框与署名输入）在重启迁移时由 V3 / V4 带过去；[pet-mode](./pet-mode.md) 开工时迁移若已重启，桌宠等 V1 之后直接用 Vue 写；[hid-stick](./hid-stick.md) 剩余卡以后端为主，不受影响。
+- **与其他路线图：** 搁置期间新增的 React 代码（[license](./license.md) 的激活对话框与署名输入）在重启迁移时由 V3 / V4 带过去；[pet-mode](./pet-mode.md) 开工时迁移若已重启，桌宠等 V1 之后直接用 Vue 写；[hid-stick](./archive/hid-stick.md) 后续项以后端为主，不受影响。
 
 ## 6. 工期 / Effort
 
