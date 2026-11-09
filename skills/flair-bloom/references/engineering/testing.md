@@ -76,6 +76,16 @@ fn hold_mode_separates_down_and_up_by_hold_duration() {
 
 运行：`cargo test -p burst-engine`（含 sim_tests）。
 
+### 连续运行与计时边界
+
+`scheduler/endurance_tests.rs` 使用虚拟时钟和固定按键集合的计数发送替身，不保存逐拍事件历史，不发送真实输入。常规回归覆盖单键／8 键连续运行、集合长度与容量有界、停止时正在按住的键完整释放，以及约 25 天、50 天和一年后的迟到处理；`output_queue.rs` 另覆盖循环次数达到 `u64::MAX` 后继续播放和释放。
+
+八小时逐拍耐久验证默认忽略，避免拖慢日常调试测试；按需运行下面的精确过滤命令。它分别执行单键和 8 键各八小时的虚拟调度，不等于真实驱动或游戏内运行八小时。本地优化构建不验证许可证功能时，按 [profile-format](profile-format.md) 的约定设置 `FLAIR_LICENSE_ALLOW_NO_KEYS=1`。
+
+```sh
+cargo test -p burst-engine --lib --release --locked eight_hours_of_continuous_hold_keeps_state_bounded_and_stops_mid_press -- --ignored
+```
+
 ### 调度器压力测试（干跑，不发真实输入）
 
 `packages/burst-engine/src/bin/scheduler_stress.rs`：把单调度线程、规则计时、StopAll 的 ACK 路径、generation 丢弃路径、同目标键合并跑到极限，用来看 64 条规则 10ms 间隔下调度延迟与线程数是否失控。
@@ -97,7 +107,7 @@ Windows 队列接收器：`cargo run -p burst-engine --example sequence_smoke --
 自装一个 `WH_KEYBOARD_LL` hook，对带 `SIM_MARKER` 的自注入事件**捕获后直接吞掉**（返回 1，不下传）——既验证 `win_input` SendInput 注入 → LL hook → 还原出正确 vk/抬起/`SIM_MARKER` 整条真实链路，又**零副作用**（注入键不泄漏到前台窗口，物理键照常放行）。需交互式桌面会话，故 `#[ignore]`：
 
 ```sh
-cargo test -p burst-engine -- --ignored
+cargo test -p burst-engine smoke_tests:: -- --ignored
 ```
 
 **仍待真机/真驱动**：DD-HID / DDSimple / Interception 后端的往返需装对应驱动（且 DD 系列需管理员），同样的 hook + 吞自注入框架可扩展过去，但 GitHub 托管 runner 装不了驱动，需自建带驱动的 Windows runner，或在发版前本机手动跑。

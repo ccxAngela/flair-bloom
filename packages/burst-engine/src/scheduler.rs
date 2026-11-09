@@ -1270,6 +1270,9 @@ mod safety_tests;
 mod sequence_tests;
 
 #[cfg(test)]
+mod endurance_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use qzh_profile::key_id::MouseButton;

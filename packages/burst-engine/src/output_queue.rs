@@ -270,4 +270,28 @@ mod tests {
         );
         assert_eq!(queue.step_index(), 1);
     }
+
+    #[test]
+    fn saturated_cycle_counter_keeps_playing_and_releasing() {
+        let start = Instant::now();
+        let mut queue = OutputQueue::new(
+            vec![OutputStep {
+                key: Q,
+                interval_ms: 10,
+            }],
+            start,
+        )
+        .unwrap();
+        queue.cycles = u64::MAX - 1;
+        for cycle in 0..3 {
+            let down_at = start + Duration::from_millis(cycle * 10);
+            assert_eq!(queue.peek(down_at), Some(QueueAction::Press(Q)));
+            queue.acknowledge(QueueAction::Press(Q), down_at).unwrap();
+            let up_at = down_at + Duration::from_millis(3);
+            assert_eq!(queue.peek(up_at), Some(QueueAction::Release(Q)));
+            queue.acknowledge(QueueAction::Release(Q), up_at).unwrap();
+            assert_eq!(queue.completed_cycles(), u64::MAX);
+            assert!(queue.held_key().is_none());
+        }
+    }
 }
