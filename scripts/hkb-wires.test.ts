@@ -228,7 +228,8 @@ test('走线层级低于键帽，跨行路径不会压在中间键帽表面', ()
     'utf8',
   );
   const z = (selector: string) => {
-    const body = css.match(new RegExp(`${selector.replace('.', '\\.') }\\s*\\{([\\s\\S]*?)\\}`))?.[1];
+    const escaped = selector.replace('.', '\\.');
+    const body = css.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`))?.[1];
     const value = body?.match(/z-index:\s*(-?\d+)/)?.[1];
     return value === undefined ? undefined : Number(value);
   };
