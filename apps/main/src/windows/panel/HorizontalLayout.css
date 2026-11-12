@@ -36,6 +36,7 @@
 
 .hkb-cap {
   flex: none;
+  z-index: 1;
   height: 40px;
   display: inline-flex;
   align-items: center;
@@ -370,7 +371,7 @@
   height: 100%;
   pointer-events: none;
   overflow: visible;
-  z-index: 2;
+  z-index: 0;
 }
 .hkb-wire {
   --wire: var(--fb-color-primary);
