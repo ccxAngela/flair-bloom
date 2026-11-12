@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { formatReleaseDate } from './release-date.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -21,7 +22,7 @@ interface FileUpdater {
   update(content: string): string;
 }
 
-const today = new Date().toISOString().split('T')[0];
+const today = formatReleaseDate();
 
 const files: FileUpdater[] = [
   {
