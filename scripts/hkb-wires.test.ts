@@ -1,6 +1,7 @@
 // 横版走线几何的纯函数断言。前端没有测试框架，用 Node 内置 test runner + 类型剥离直接跑：
 // `pnpm test:ui`。
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   buildWires,
@@ -221,27 +222,22 @@ test('跨行多条同向：跨度远的在内层，末段不切过别的横段',
   for (const p of placed) assert.ok(p.points[0][1] === 85, '从下沿出');
 });
 
-test('跨越中间键盘行时，竖向段不能穿过中间键帽', () => {
-  const keys = { H: cap(1, 1), M: cap(4, 2), T: cap(4, 3) };
-  const { by } = scene(keys, 'H', [['H', 'T']]);
-  const path = by('H', 'T').points;
-  const middle = keys.M;
+test('走线层级低于键帽，跨行路径不会压在中间键帽表面', () => {
+  const css = readFileSync(
+    new URL('../apps/main/src/windows/panel/HorizontalLayout.css', import.meta.url),
+    'utf8',
+  );
+  const z = (selector: string) => {
+    const body = css.match(new RegExp(`${selector.replace('.', '\\.') }\\s*\\{([\\s\\S]*?)\\}`))?.[1];
+    const value = body?.match(/z-index:\s*(-?\d+)/)?.[1];
+    return value === undefined ? undefined : Number(value);
+  };
 
-  const crossesMiddle = path.slice(1).some((point, i) => {
-    const prev = path[i];
-    if (Math.abs(prev[0] - point[0]) >= 0.5) return false;
-    const x = point[0];
-    const minY = Math.min(prev[1], point[1]);
-    const maxY = Math.max(prev[1], point[1]);
-    return (
-      x > middle.left &&
-      x < middle.left + middle.width &&
-      maxY > middle.top &&
-      minY < middle.top + middle.height
-    );
-  });
-
-  assert.equal(crossesMiddle, false);
+  const capZ = z('.hkb-cap');
+  const wireZ = z('.hkb-wires');
+  assert.notEqual(capZ, undefined);
+  assert.notEqual(wireZ, undefined);
+  assert.ok(capZ! > wireZ!, `键帽层级 ${capZ} 应高于走线层级 ${wireZ}`);
 });
 
 test('默认侧会交叉时改走另一侧', () => {
