@@ -221,6 +221,29 @@ test('跨行多条同向：跨度远的在内层，末段不切过别的横段',
   for (const p of placed) assert.ok(p.points[0][1] === 85, '从下沿出');
 });
 
+test('跨越中间键盘行时，竖向段不能穿过中间键帽', () => {
+  const keys = { H: cap(1, 1), M: cap(4, 2), T: cap(4, 3) };
+  const { by } = scene(keys, 'H', [['H', 'T']]);
+  const path = by('H', 'T').points;
+  const middle = keys.M;
+
+  const crossesMiddle = path.slice(1).some((point, i) => {
+    const prev = path[i];
+    if (Math.abs(prev[0] - point[0]) >= 0.5) return false;
+    const x = point[0];
+    const minY = Math.min(prev[1], point[1]);
+    const maxY = Math.max(prev[1], point[1]);
+    return (
+      x > middle.left &&
+      x < middle.left + middle.width &&
+      maxY > middle.top &&
+      minY < middle.top + middle.height
+    );
+  });
+
+  assert.equal(crossesMiddle, false);
+});
+
 test('默认侧会交叉时改走另一侧', () => {
   // 6 → 9 同行默认走上方；6 → X 去上两行、横坐标落在 6 与 9 之间，末段会切过上方通道
   const keys = { ...numberRow, X: cap(6, -1) };
